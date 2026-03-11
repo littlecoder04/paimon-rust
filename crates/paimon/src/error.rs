@@ -82,6 +82,15 @@ pub enum Error {
     )]
     FileIndexFormatInvalid { message: String },
 
+    #[snafu(
+        visibility(pub(crate)),
+        display("Paimon hitting unexpected parquet error: {}", message)
+    )]
+    ParquetDataUnexpected {
+        message: String,
+        source: Box<parquet::errors::ParquetError>,
+    },
+
     // ======================= catalog errors ===============================
     #[snafu(display("Database {} already exists.", database))]
     DatabaseAlreadyExist { database: String },
@@ -115,6 +124,15 @@ impl From<apache_avro::Error> for Error {
     fn from(source: apache_avro::Error) -> Self {
         Error::DataUnexpected {
             message: "".to_string(),
+            source: Box::new(source),
+        }
+    }
+}
+
+impl From<parquet::errors::ParquetError> for Error {
+    fn from(source: parquet::errors::ParquetError) -> Self {
+        Error::ParquetDataUnexpected {
+            message: format!("Failed to read a Parquet file: {source}"),
             source: Box::new(source),
         }
     }

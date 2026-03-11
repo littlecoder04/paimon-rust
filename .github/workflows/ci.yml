@@ -77,7 +77,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Test
-        run: cargo test --all-targets --workspace
+        run: cargo test -p paimon --all-targets
         env:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full
@@ -89,6 +89,12 @@ jobs:
 
       - name: Start Docker containers
         run: make docker-up
+
+      - name: Integration Test
+        run: cargo test -p paimon-integration-tests --all-targets
+        env:
+          RUST_LOG: DEBUG
+          RUST_BACKTRACE: full
 
       - name: Stop Docker containers
         if: always()

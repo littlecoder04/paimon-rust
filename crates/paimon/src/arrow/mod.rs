@@ -15,21 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod error;
-pub use error::Error;
-pub use error::Result;
+mod reader;
 
-mod arrow;
-pub mod catalog;
-mod deletion_vector;
-pub mod file_index;
-pub mod io;
-pub mod spec;
-pub mod table;
-
-pub use catalog::Catalog;
-pub use catalog::FileSystemCatalog;
-
-pub use table::{
-    DataSplit, DataSplitBuilder, Plan, ReadBuilder, SnapshotManager, Table, TableRead, TableScan,
-};
+pub use crate::arrow::reader::ArrowReaderBuilder;

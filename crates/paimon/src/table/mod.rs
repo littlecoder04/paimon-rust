@@ -22,6 +22,9 @@ mod snapshot_manager;
 mod source;
 mod table_scan;
 
+use crate::Result;
+use arrow_array::RecordBatch;
+use futures::stream::BoxStream;
 pub use read_builder::{ReadBuilder, TableRead};
 pub use snapshot_manager::SnapshotManager;
 pub use source::{DataSplit, DataSplitBuilder, Plan};
@@ -84,3 +87,6 @@ impl Table {
         ReadBuilder::new(self)
     }
 }
+
+/// A stream of arrow [`RecordBatch`]es.
+pub type ArrowRecordBatchStream = BoxStream<'static, Result<RecordBatch>>;

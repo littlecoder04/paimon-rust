@@ -1237,13 +1237,22 @@ impl Default for VarCharType {
     }
 }
 
+/// Alias for variable-length string used in schema JSON (Java: VarCharType.STRING_TYPE).
+const STRING_TYPE_NAME: &str = "STRING";
+
 impl FromStr for VarCharType {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        if s.starts_with(STRING_TYPE_NAME) {
+            let nullable = !s.contains("NOT NULL");
+            return VarCharType::with_nullable(nullable, Self::MAX_LENGTH);
+        }
         if !s.starts_with(serde_utils::VARCHAR::NAME) {
             return DataTypeInvalidSnafu {
-                message: "Invalid VARCHAR type. Expected string to start with 'VARCHAR'.",
+                message:
+                    "Invalid VARCHAR type. Expected string to start with 'VARCHAR' or 'STRING'.",
             }
             .fail();
         }

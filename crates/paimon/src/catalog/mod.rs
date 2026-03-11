@@ -25,6 +25,7 @@ mod filesystem;
 use std::collections::HashMap;
 use std::fmt;
 
+pub use filesystem::*;
 use serde::{Deserialize, Serialize};
 
 /// Splitter for system table names (e.g. `table$snapshots`).

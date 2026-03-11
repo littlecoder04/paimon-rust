@@ -20,10 +20,11 @@
 //! Reference: [pypaimon.read.read_builder.ReadBuilder](https://github.com/apache/paimon/blob/master/paimon-python/pypaimon/read/read_builder.py)
 //! and [pypaimon.table.file_store_table.FileStoreTable.new_read_builder](https://github.com/apache/paimon/blob/master/paimon-python/pypaimon/table/file_store_table.py).
 
+use super::{ArrowRecordBatchStream, Table, TableScan};
+use crate::arrow::ArrowReaderBuilder;
 use crate::spec::DataField;
 use crate::Result;
-
-use super::{Table, TableScan};
+use crate::{DataSplit, Error};
 
 /// Builder for table scan and table read (new_scan, new_read).
 ///
@@ -71,5 +72,28 @@ impl<'a> TableRead<'a> {
     /// Table for this read.
     pub fn table(&self) -> &Table {
         self.table
+    }
+
+    /// Returns an [`ArrowRecordBatchStream`].
+    pub fn to_arrow(&self, data_splits: &[DataSplit]) -> crate::Result<ArrowRecordBatchStream> {
+        // todo: consider get read batch size from table
+        if !self.table.schema.primary_keys().is_empty() {
+            return Err(Error::Unsupported {
+                message: format!(
+                    "Reading tables with primary keys is not yet supported. Primary keys: {:?}",
+                    self.table.schema.primary_keys()
+                ),
+            });
+        }
+        if !self.table.schema.partition_keys().is_empty() {
+            return Err(Error::Unsupported {
+                message: format!(
+                    "Reading partitioned tables is not yet supported. Partition keys: {:?}",
+                    self.table.schema.partition_keys()
+                ),
+            });
+        }
+        let arrow_reader_builder = ArrowReaderBuilder::new(self.table.file_io.clone()).build();
+        arrow_reader_builder.read(data_splits)
     }
 }

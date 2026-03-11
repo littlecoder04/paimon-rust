@@ -28,15 +28,14 @@ def main():
     # Use Paimon catalog (configured in spark-defaults.conf with warehouse file:/tmp/paimon-warehouse)
     spark.sql("USE paimon.default")
 
-    # Table: simple keyed table for read tests
+    # Table: simple log table for read tests
     spark.sql("""
-        CREATE TABLE IF NOT EXISTS simple (
+        CREATE TABLE IF NOT EXISTS simple_log_table (
             id INT,
             name STRING
         ) USING paimon
-        TBLPROPERTIES ('primary-key' = 'id')
     """)
-    spark.sql("INSERT INTO simple VALUES (1, 'alice'), (2, 'bob'), (3, 'carol')")
+    spark.sql("INSERT INTO simple_log_table VALUES (1, 'alice'), (2, 'bob'), (3, 'carol')")
 
 if __name__ == "__main__":
     main()
