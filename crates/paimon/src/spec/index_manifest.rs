@@ -15,10 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::io::FileIO;
 use crate::spec::manifest_common::FileKind;
 use crate::spec::IndexFileMeta;
+use apache_avro::types::Value;
+use apache_avro::{from_value, Reader};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
+
+use crate::Error;
+use crate::Result;
 
 /// Manifest entry for index file.
 ///
@@ -49,6 +55,33 @@ impl Display for IndexManifestEntry {
             "IndexManifestEntry{{kind={:?}, partition={:?}, bucket={}, index_file={}}}",
             self.kind, self.partition, self.bucket, self.index_file,
         )
+    }
+}
+
+/// Index manifest file reader (entries describing index files per partition/bucket).
+///
+/// Reference: [org.apache.paimon.index.IndexFileHandler](https://github.com/apache/paimon/blob/release-1.3/paimon-core/src/main/java/org/apache/paimon/index/IndexFileHandler.java)
+pub struct IndexManifest;
+
+impl IndexManifest {
+    /// Read index manifest entries from a file.
+    pub async fn read(file_io: &FileIO, path: &str) -> Result<Vec<IndexManifestEntry>> {
+        let input_file = file_io.new_input(path)?;
+        if !input_file.exists().await? {
+            return Ok(Vec::new());
+        }
+        let content = input_file.read().await?;
+        Self::read_from_bytes(&content)
+    }
+
+    /// Read index manifest entries from Avro-encoded bytes.
+    pub fn read_from_bytes(bytes: &[u8]) -> Result<Vec<IndexManifestEntry>> {
+        let reader = Reader::new(bytes).map_err(Error::from)?;
+        let records = reader
+            .collect::<std::result::Result<Vec<Value>, _>>()
+            .map_err(Error::from)?;
+        let values = Value::Array(records);
+        from_value::<Vec<IndexManifestEntry>>(&values).map_err(Error::from)
     }
 }
 

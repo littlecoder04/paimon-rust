@@ -31,5 +31,6 @@ pub use catalog::Catalog;
 pub use catalog::FileSystemCatalog;
 
 pub use table::{
-    DataSplit, DataSplitBuilder, Plan, ReadBuilder, SnapshotManager, Table, TableRead, TableScan,
+    DataSplit, DataSplitBuilder, DeletionFile, PartitionBucket, Plan, ReadBuilder, SnapshotManager,
+    Table, TableRead, TableScan,
 };

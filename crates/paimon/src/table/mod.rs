@@ -27,7 +27,7 @@ use arrow_array::RecordBatch;
 use futures::stream::BoxStream;
 pub use read_builder::{ReadBuilder, TableRead};
 pub use snapshot_manager::SnapshotManager;
-pub use source::{DataSplit, DataSplitBuilder, Plan};
+pub use source::{DataSplit, DataSplitBuilder, DeletionFile, PartitionBucket, Plan};
 pub use table_scan::TableScan;
 
 use crate::catalog::Identifier;
