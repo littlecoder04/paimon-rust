@@ -15,19 +15,21 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[workspace]
-resolver = "2"
-members = ["crates/paimon", "crates/integration_tests", "bindings/c"]
+[package]
+name = "paimon-c"
+description = "C bindings for Apache Paimon Rust"
 
-[workspace.package]
-version = "0.0.0"
-edition = "2021"
-homepage = "https://paimon.apache.org/"
-repository = "https://github.com/apache/paimon-rust"
-license = "Apache-2.0"
-rust-version = "1.86.0"
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
 
-[workspace.dependencies]
-arrow-array = { version = "57.0", features = ["ffi"] }
-parquet = "57.0"
-tokio = "1.39.2"
+[lib]
+crate-type = ["cdylib", "staticlib"]
+doc = false
+
+[dependencies]
+paimon = { path = "../../crates/paimon" }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+futures = "0.3"
+arrow-array = { workspace = true }
