@@ -236,7 +236,7 @@ impl DLFDefaultSigner {
 
         let sorted_headers = self.build_sorted_signed_headers_map(headers);
         for (key, value) in sorted_headers {
-            parts.push(format!("{}:{}", key, value));
+            parts.push(format!("{key}:{value}"));
         }
 
         let content_sha256 = headers
@@ -262,7 +262,7 @@ impl DLFDefaultSigner {
                 let key = Self::trim(key);
                 if !value.is_empty() {
                     let value = Self::trim(value);
-                    format!("{}={}", key, value)
+                    format!("{key}={value}")
                 } else {
                     key.to_string()
                 }
@@ -480,7 +480,7 @@ impl DLFOpenApiSigner {
 
         let mut result = String::new();
         for (key, value) in sorted_headers {
-            result.push_str(&format!("{}:{}\n", key, value));
+            result.push_str(&format!("{key}:{value}\n"));
         }
         result
     }
@@ -500,7 +500,7 @@ impl DLFOpenApiSigner {
             .map(|(key, value)| {
                 let decoded_value = urlencoding::decode(value).unwrap_or_default();
                 if !decoded_value.is_empty() {
-                    format!("{}={}", key, decoded_value)
+                    format!("{key}={decoded_value}")
                 } else {
                     key.to_string()
                 }

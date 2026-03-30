@@ -154,3 +154,114 @@ func TestReadLogTable(t *testing.T) {
 		}
 	}
 }
+
+// TestReadWithProjection reads only the "id" column via WithProjection and
+// verifies that only the projected column is returned with correct values.
+func TestReadWithProjection(t *testing.T) {
+	warehouse := os.Getenv("PAIMON_TEST_WAREHOUSE")
+	if warehouse == "" {
+		warehouse = "/tmp/paimon-warehouse"
+	}
+
+	if _, err := os.Stat(warehouse); os.IsNotExist(err) {
+		t.Skipf("Skipping: warehouse %s does not exist (run 'make docker-up' first)", warehouse)
+	}
+
+	catalog, err := paimon.NewFileSystemCatalog(warehouse)
+	if err != nil {
+		t.Fatalf("Failed to create catalog: %v", err)
+	}
+	defer catalog.Close()
+
+	table, err := catalog.GetTable(paimon.NewIdentifier("default", "simple_log_table"))
+	if err != nil {
+		t.Fatalf("Failed to get table: %v", err)
+	}
+	defer table.Close()
+
+	rb, err := table.NewReadBuilder()
+	if err != nil {
+		t.Fatalf("Failed to create read builder: %v", err)
+	}
+	defer rb.Close()
+
+	// Set projection to only read "id" column
+	if err := rb.WithProjection([]string{"id"}); err != nil {
+		t.Fatalf("Failed to set projection: %v", err)
+	}
+
+	scan, err := rb.NewScan()
+	if err != nil {
+		t.Fatalf("Failed to create scan: %v", err)
+	}
+	defer scan.Close()
+
+	plan, err := scan.Plan()
+	if err != nil {
+		t.Fatalf("Failed to plan: %v", err)
+	}
+	defer plan.Close()
+
+	splits := plan.Splits()
+	if len(splits) == 0 {
+		t.Fatal("Expected at least one split")
+	}
+
+	read, err := rb.NewRead()
+	if err != nil {
+		t.Fatalf("Failed to create table read: %v", err)
+	}
+	defer read.Close()
+
+	reader, err := read.NewRecordBatchReader(splits)
+	if err != nil {
+		t.Fatalf("Failed to create record batch reader: %v", err)
+	}
+	defer reader.Close()
+
+	var ids []int32
+	batchIdx := 0
+	for {
+		record, err := reader.NextRecord()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Batch %d: failed to read next record: %v", batchIdx, err)
+		}
+
+		// Verify schema only contains the projected column
+		schema := record.Schema()
+		if schema.NumFields() != 1 {
+			record.Release()
+			t.Fatalf("Batch %d: expected 1 field, got %d: %s", batchIdx, schema.NumFields(), schema)
+		}
+		if schema.Field(0).Name != "id" {
+			record.Release()
+			t.Fatalf("Batch %d: expected field 'id', got '%s'", batchIdx, schema.Field(0).Name)
+		}
+
+		idCol := record.Column(0).(*array.Int32)
+		for j := 0; j < int(record.NumRows()); j++ {
+			ids = append(ids, idCol.Value(j))
+		}
+		record.Release()
+		batchIdx++
+	}
+
+	if len(ids) == 0 {
+		t.Fatal("Expected at least one row, got 0")
+	}
+
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+
+	expected := []int32{1, 2, 3}
+	if len(ids) != len(expected) {
+		t.Fatalf("Expected %d rows, got %d: %v", len(expected), len(ids), ids)
+	}
+	for i, exp := range expected {
+		if ids[i] != exp {
+			t.Errorf("Row %d: expected id=%d, got id=%d", i, exp, ids[i])
+		}
+	}
+}

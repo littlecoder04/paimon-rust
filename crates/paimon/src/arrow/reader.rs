@@ -165,8 +165,7 @@ impl ArrowReader {
                                 batch.schema().index_of(name).map_err(|_| {
                                     Error::UnexpectedError {
                                         message: format!(
-                                            "Projected column '{}' not found in Parquet batch schema of file {}",
-                                            name, path_to_read
+                                            "Projected column '{name}' not found in Parquet batch schema of file {path_to_read}"
                                         ),
                                         source: None,
                                     }

@@ -157,7 +157,7 @@ let df = ctx.sql("SELECT * FROM my_table").await?;
 df.show().await?;
 ```
 
-> **Note:** The DataFusion integration currently supports full table scans only. Column projection and predicate pushdown are not yet implemented.
+> **Note:** The DataFusion integration supports full table scans and column projection. Predicate pushdown is not yet implemented.
 
 ## Building from Source
 

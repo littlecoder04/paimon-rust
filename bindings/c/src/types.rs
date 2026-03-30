@@ -17,6 +17,9 @@
 
 use std::ffi::c_void;
 
+use paimon::spec::DataField;
+use paimon::table::Table;
+
 /// C-compatible byte buffer.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -68,6 +71,12 @@ pub struct paimon_read_builder {
     pub inner: *mut c_void,
 }
 
+/// Internal state for ReadBuilder that stores table and projection columns.
+pub(crate) struct ReadBuilderState {
+    pub table: Table,
+    pub projected_columns: Option<Vec<String>>,
+}
+
 #[repr(C)]
 pub struct paimon_table_scan {
     pub inner: *mut c_void,
@@ -76,6 +85,12 @@ pub struct paimon_table_scan {
 #[repr(C)]
 pub struct paimon_table_read {
     pub inner: *mut c_void,
+}
+
+/// Internal state for TableRead that stores table and projected read type.
+pub(crate) struct TableReadState {
+    pub table: Table,
+    pub read_type: Vec<DataField>,
 }
 
 #[repr(C)]

@@ -168,7 +168,7 @@ impl DLFECSTokenLoader {
     async fn get_token(&self, url: &str) -> Result<DLFToken> {
         let token_json = self.http_client.get(url).await?;
         serde_json::from_str(&token_json).map_err(|e| Error::DataInvalid {
-            message: format!("Failed to parse token JSON: {}", e),
+            message: format!("Failed to parse token JSON: {e}"),
             source: None,
         })
     }
@@ -176,7 +176,7 @@ impl DLFECSTokenLoader {
     /// Build the token URL from base URL and role name.
     fn build_token_url(&self, role_name: &str) -> String {
         let base_url = self.ecs_metadata_url.trim_end_matches('/');
-        format!("{}/{}", base_url, role_name)
+        format!("{base_url}/{role_name}")
     }
 }
 
@@ -396,7 +396,7 @@ impl TokenHTTPClient {
             match self.client.get(url).send().await {
                 Ok(response) if response.status().is_success() => {
                     return response.text().await.map_err(|e| Error::DataInvalid {
-                        message: format!("Failed to read response: {}", e),
+                        message: format!("Failed to read response: {e}"),
                         source: None,
                     });
                 }
@@ -404,7 +404,7 @@ impl TokenHTTPClient {
                     last_error = format!("HTTP error: {}", response.status());
                 }
                 Err(e) => {
-                    last_error = format!("Request failed: {}", e);
+                    last_error = format!("Request failed: {e}");
                 }
             }
 

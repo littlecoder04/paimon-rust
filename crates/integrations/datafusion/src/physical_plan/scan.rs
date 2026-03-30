@@ -30,15 +30,21 @@ use paimon::table::Table;
 
 use crate::error::to_datafusion_error;
 
-/// Execution plan that scans a Paimon table (read-only, no projection, no predicate, no limit).
+/// Execution plan that scans a Paimon table with optional column projection.
 #[derive(Debug)]
 pub struct PaimonTableScan {
     table: Table,
+    /// Projected column names (if None, reads all columns).
+    projected_columns: Option<Vec<String>>,
     plan_properties: PlanProperties,
 }
 
 impl PaimonTableScan {
-    pub(crate) fn new(schema: ArrowSchemaRef, table: Table) -> Self {
+    pub(crate) fn new(
+        schema: ArrowSchemaRef,
+        table: Table,
+        projected_columns: Option<Vec<String>>,
+    ) -> Self {
         let plan_properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             // TODO: Currently all Paimon splits are read in a single DataFusion partition,
@@ -51,6 +57,7 @@ impl PaimonTableScan {
         );
         Self {
             table,
+            projected_columns,
             plan_properties,
         }
     }
@@ -91,9 +98,17 @@ impl ExecutionPlan for PaimonTableScan {
     ) -> DFResult<SendableRecordBatchStream> {
         let table = self.table.clone();
         let schema = self.schema();
+        let projected_columns = self.projected_columns.clone();
 
         let fut = async move {
-            let read_builder = table.new_read_builder();
+            let mut read_builder = table.new_read_builder();
+
+            // Apply projection if specified
+            if let Some(ref columns) = projected_columns {
+                let col_refs: Vec<&str> = columns.iter().map(|s| s.as_str()).collect();
+                read_builder.with_projection(&col_refs);
+            }
+
             let scan = read_builder.new_scan();
             let plan = scan.plan().await.map_err(to_datafusion_error)?;
             let read = read_builder.new_read().map_err(to_datafusion_error)?;

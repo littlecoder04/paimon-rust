@@ -65,10 +65,7 @@ impl<'a> ReadBuilder<'a> {
             Some(projected) => self.resolve_projected_fields(projected)?,
         };
 
-        Ok(TableRead {
-            table: self.table,
-            read_type,
-        })
+        Ok(TableRead::new(self.table, read_type))
     }
 
     fn resolve_projected_fields(&self, projected_fields: &[String]) -> Result<Vec<DataField>> {
@@ -91,10 +88,7 @@ impl<'a> ReadBuilder<'a> {
         for name in projected_fields {
             if !seen.insert(name.as_str()) {
                 return Err(Error::ConfigInvalid {
-                    message: format!(
-                        "Duplicate projection column '{}' for table {}",
-                        name, full_name
-                    ),
+                    message: format!("Duplicate projection column '{name}' for table {full_name}"),
                 });
             }
 
@@ -121,6 +115,11 @@ pub struct TableRead<'a> {
 }
 
 impl<'a> TableRead<'a> {
+    /// Create a new TableRead with a specific read type (projected fields).
+    pub fn new(table: &'a Table, read_type: Vec<DataField>) -> Self {
+        Self { table, read_type }
+    }
+
     /// Schema (fields) that this read will produce.
     pub fn read_type(&self) -> &[DataField] {
         &self.read_type

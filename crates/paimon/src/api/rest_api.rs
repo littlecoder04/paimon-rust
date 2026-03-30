@@ -50,7 +50,7 @@ use super::rest_util::RESTUtil;
 fn validate_non_empty(value: &str, field_name: &str) -> Result<()> {
     if value.trim().is_empty() {
         return Err(crate::Error::ConfigInvalid {
-            message: format!("{} cannot be empty", field_name),
+            message: format!("{field_name} cannot be empty"),
         });
     }
     Ok(())

@@ -120,15 +120,39 @@ async fn test_read_primary_key_table_via_datafusion() {
 }
 
 #[tokio::test]
-async fn test_subset_projection_returns_not_implemented() {
-    let error = collect_query("simple_log_table", "SELECT id FROM simple_log_table")
+async fn test_projection_via_datafusion() {
+    let batches = collect_query("simple_log_table", "SELECT id FROM simple_log_table")
         .await
-        .expect_err("Subset projection should be rejected until projection support lands");
+        .expect("Subset projection should succeed");
 
     assert!(
-        error
-            .to_string()
-            .contains("does not yet support subset or reordered projections"),
-        "Expected explicit unsupported projection error, got: {error}"
+        !batches.is_empty(),
+        "Expected at least one batch from projected query"
+    );
+
+    let mut actual_ids = Vec::new();
+    for batch in &batches {
+        let schema = batch.schema();
+        let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(
+            field_names,
+            vec!["id"],
+            "Projected query should only return 'id' column"
+        );
+
+        let id_array = batch
+            .column_by_name("id")
+            .and_then(|col| col.as_any().downcast_ref::<Int32Array>())
+            .expect("Expected Int32Array for id column");
+        for i in 0..id_array.len() {
+            actual_ids.push(id_array.value(i));
+        }
+    }
+
+    actual_ids.sort();
+    assert_eq!(
+        actual_ids,
+        vec![1, 2, 3],
+        "Projected id values should match"
     );
 }

@@ -88,7 +88,7 @@ async fn test_create_database() {
 
     // Create new database
     let result = ctx.api.create_database("new_db", None).await;
-    assert!(result.is_ok(), "failed to create database: {:?}", result);
+    assert!(result.is_ok(), "failed to create database: {result:?}");
 
     // Verify creation
     let dbs = ctx.api.list_databases().await.unwrap();
@@ -132,7 +132,7 @@ async fn test_error_responses_status_mapping() {
             );
             assert_eq!(j.get("code").and_then(|v| v.as_u64()), Some(403));
         }
-        Err(e) => panic!("Expected 403 response, got error: {:?}", e),
+        Err(e) => panic!("Expected 403 response, got error: {e:?}"),
     }
 
     // POST create existing database -> 409
@@ -168,7 +168,7 @@ async fn test_alter_database() {
     updates.insert("key2".to_string(), "value2".to_string());
 
     let result = ctx.api.alter_database("default", vec![], updates).await;
-    assert!(result.is_ok(), "failed to alter database: {:?}", result);
+    assert!(result.is_ok(), "failed to alter database: {result:?}");
 
     // Verify the updates by getting the database
     let db_resp = ctx.api.get_database("default").await.unwrap();
@@ -180,7 +180,7 @@ async fn test_alter_database() {
         .api
         .alter_database("default", vec!["key1".to_string()], HashMap::new())
         .await;
-    assert!(result.is_ok(), "failed to remove key: {:?}", result);
+    assert!(result.is_ok(), "failed to remove key: {result:?}");
 
     let db_resp = ctx.api.get_database("default").await.unwrap();
     assert!(!db_resp.options.contains_key("key1"));
@@ -211,7 +211,7 @@ async fn test_drop_database() {
 
     // Drop database
     let result = ctx.api.drop_database("to_drop").await;
-    assert!(result.is_ok(), "failed to drop database: {:?}", result);
+    assert!(result.is_ok(), "failed to drop database: {result:?}");
 
     // Verify database is gone
     let dbs = ctx.api.list_databases().await.unwrap();
@@ -278,8 +278,7 @@ async fn test_list_tables_empty_database() {
     let tables = ctx.api.list_tables("default").await.unwrap();
     assert!(
         tables.is_empty(),
-        "expected empty tables list, got: {:?}",
-        tables
+        "expected empty tables list, got: {tables:?}"
     );
 }
 
@@ -323,7 +322,7 @@ async fn test_create_table() {
         .api
         .create_table(&Identifier::new("default", "new_table"), schema)
         .await;
-    assert!(result.is_ok(), "failed to create table: {:?}", result);
+    assert!(result.is_ok(), "failed to create table: {result:?}");
 
     // Verify table exists
     let tables = ctx.api.list_tables("default").await.unwrap();
@@ -354,7 +353,7 @@ async fn test_drop_table() {
         .api
         .drop_table(&Identifier::new("default", "table_to_drop"))
         .await;
-    assert!(result.is_ok(), "failed to drop table: {:?}", result);
+    assert!(result.is_ok(), "failed to drop table: {result:?}");
 
     // Verify table is gone
     let tables = ctx.api.list_tables("default").await.unwrap();
@@ -398,7 +397,7 @@ async fn test_rename_table() {
             &Identifier::new("default", "new_table"),
         )
         .await;
-    assert!(result.is_ok(), "failed to rename table: {:?}", result);
+    assert!(result.is_ok(), "failed to rename table: {result:?}");
 
     // Verify old table is gone
     let tables = ctx.api.list_tables("default").await.unwrap();

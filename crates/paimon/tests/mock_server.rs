@@ -115,7 +115,7 @@ impl RESTServer {
                 let err = ErrorResponse::new(
                     None,
                     None,
-                    Some(format!("Warehouse {} not found", warehouse)),
+                    Some(format!("Warehouse {warehouse} not found")),
                     Some(404),
                 );
                 return (StatusCode::NOT_FOUND, Json(err)).into_response();
@@ -253,7 +253,7 @@ impl RESTServer {
 
         if s.databases.remove(&name).is_some() {
             // Also remove all tables in this database
-            let prefix = format!("{}.", name);
+            let prefix = format!("{name}.");
             s.tables.retain(|key, _| !key.starts_with(&prefix));
             s.no_permission_tables
                 .retain(|key| !key.starts_with(&prefix));
@@ -296,7 +296,7 @@ impl RESTServer {
             return (StatusCode::NOT_FOUND, Json(err)).into_response();
         }
 
-        let prefix = format!("{}.", db);
+        let prefix = format!("{db}.");
         let mut tables: Vec<String> = s
             .tables
             .keys()
@@ -353,7 +353,7 @@ impl RESTServer {
             return (StatusCode::NOT_FOUND, Json(err)).into_response();
         }
 
-        let key = format!("{}.{}", db, table_name);
+        let key = format!("{db}.{table_name}");
         if s.tables.contains_key(&key) {
             let err = ErrorResponse::new(
                 Some("table".to_string()),
@@ -385,7 +385,7 @@ impl RESTServer {
     ) -> impl IntoResponse {
         let s = state.inner.lock().unwrap();
 
-        let key = format!("{}.{}", db, table);
+        let key = format!("{db}.{table}");
         if s.no_permission_tables.contains(&key) {
             let err = ErrorResponse::new(
                 Some("table".to_string()),
@@ -426,7 +426,7 @@ impl RESTServer {
     ) -> impl IntoResponse {
         let mut s = state.inner.lock().unwrap();
 
-        let key = format!("{}.{}", db, table);
+        let key = format!("{db}.{table}");
         if s.no_permission_tables.contains(&key) {
             let err = ErrorResponse::new(
                 Some("table".to_string()),
@@ -556,7 +556,7 @@ impl RESTServer {
             )
         });
 
-        let key = format!("{}.{}", database, table);
+        let key = format!("{database}.{table}");
         s.tables.entry(key).or_insert_with(|| {
             GetTableResponse::new(
                 Some(table.to_string()),
@@ -574,12 +574,11 @@ impl RESTServer {
     #[allow(dead_code)]
     pub fn add_no_permission_table(&self, database: &str, table: &str) {
         let mut s = self.inner.lock().unwrap();
-        s.no_permission_tables
-            .insert(format!("{}.{}", database, table));
+        s.no_permission_tables.insert(format!("{database}.{table}"));
     }
     /// Get the server URL.
     pub fn url(&self) -> Option<String> {
-        self.addr.map(|a| format!("http://{}", a))
+        self.addr.map(|a| format!("http://{a}"))
     }
     /// Get the warehouse path.
     #[allow(dead_code)]
@@ -678,25 +677,25 @@ pub async fn start_mock_server(
         .route("/v1/config", get(RESTServer::get_config))
         // Database routes
         .route(
-            &format!("{}/databases", prefix),
+            &format!("{prefix}/databases"),
             get(RESTServer::list_databases).post(RESTServer::create_database),
         )
         .route(
-            &format!("{}/databases/:name", prefix),
+            &format!("{prefix}/databases/:name"),
             get(RESTServer::get_database)
                 .post(RESTServer::alter_database)
                 .delete(RESTServer::drop_database),
         )
         .route(
-            &format!("{}/databases/:db/tables", prefix),
+            &format!("{prefix}/databases/:db/tables"),
             get(RESTServer::list_tables).post(RESTServer::create_table),
         )
         .route(
-            &format!("{}/databases/:db/tables/:table", prefix),
+            &format!("{prefix}/databases/:db/tables/:table"),
             get(RESTServer::get_table).delete(RESTServer::drop_table),
         )
         .route(
-            &format!("{}/tables/rename", prefix),
+            &format!("{prefix}/tables/rename"),
             axum::routing::post(RESTServer::rename_table),
         )
         // ECS metadata endpoints (for token loader testing)
@@ -717,7 +716,7 @@ pub async fn start_mock_server(
 
     let server_handle = tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, app.into_make_service()).await {
-            eprintln!("mock server error: {}", e);
+            eprintln!("mock server error: {e}");
         }
     });
 

@@ -21,6 +21,7 @@ package paimon
 
 import (
 	"context"
+	"runtime"
 	"sync"
 	"unsafe"
 
@@ -42,6 +43,17 @@ func (rb *ReadBuilder) Close() {
 		rb.inner = nil
 		rb.lib.release()
 	})
+}
+
+// WithProjection sets column projection by name. Output order follows the
+// caller-specified order. Unknown or duplicate names cause NewRead() to fail;
+// an empty list is a valid zero-column projection.
+func (rb *ReadBuilder) WithProjection(columns []string) error {
+	if rb.inner == nil {
+		return ErrClosed
+	}
+	projFn := ffiReadBuilderWithProjection.symbol(rb.ctx)
+	return projFn(rb.inner, columns)
 }
 
 // NewScan creates a TableScan for planning which data files to read.
@@ -82,6 +94,45 @@ var ffiReadBuilderFree = newFFI(ffiOpts{
 			nil,
 			unsafe.Pointer(&rb),
 		)
+	}
+})
+
+var ffiReadBuilderWithProjection = newFFI(ffiOpts{
+	sym:    "paimon_read_builder_with_projection",
+	rType:  &ffi.TypePointer,
+	aTypes: []*ffi.Type{&ffi.TypePointer, &ffi.TypePointer},
+}, func(ctx context.Context, ffiCall ffiCall) func(rb *paimonReadBuilder, columns []string) error {
+	return func(rb *paimonReadBuilder, columns []string) error {
+		var colPtrs []*byte
+		var cStrings [][]byte
+
+		// Convert Go strings to null-terminated C strings
+		for _, col := range columns {
+			cStr := append([]byte(col), 0)
+			cStrings = append(cStrings, cStr)
+			colPtrs = append(colPtrs, &cStr[0])
+		}
+		// Null-terminate the array
+		colPtrs = append(colPtrs, nil)
+
+		var colsPtr unsafe.Pointer
+		if len(colPtrs) > 0 {
+			colsPtr = unsafe.Pointer(&colPtrs[0])
+		}
+
+		var errPtr *paimonError
+		ffiCall(
+			unsafe.Pointer(&errPtr),
+			unsafe.Pointer(&rb),
+			unsafe.Pointer(&colsPtr),
+		)
+		// Ensure Go-managed buffers stay alive for the full native call.
+		runtime.KeepAlive(cStrings)
+		runtime.KeepAlive(colPtrs)
+		if errPtr != nil {
+			return parseError(ctx, errPtr)
+		}
+		return nil
 	}
 })
 
