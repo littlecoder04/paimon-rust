@@ -90,54 +90,38 @@ mod tests {
     use indexmap::IndexMap;
 
     use super::*;
+    use crate::spec::DeletionVectorMeta;
 
     #[test]
     fn test_read_index_manifest_file() {
         let workdir =
             std::env::current_dir().unwrap_or_else(|err| panic!("current_dir must exist: {err}"));
         let path = workdir
-            .join("tests/fixtures/manifest/index-manifest-85cc6729-f5af-431a-a1c3-ef45319328fb-0");
+            .join("tests/fixtures/manifest/index-manifest-7e816ed9-9f3b-4786-9985-8937d4e07b6e-0");
         let source = std::fs::read(path.to_str().unwrap()).unwrap();
-        let mut reader =
-            serde_avro_fast::object_container_file_encoding::Reader::from_slice(source.as_slice())
-                .unwrap();
-        let res: Vec<_> = reader
-            .deserialize::<IndexManifestEntry>()
-            .collect::<Result<_, _>>()
-            .unwrap();
+        let res = IndexManifest::read_from_bytes(&source).unwrap();
         assert_eq!(
             res,
-            vec![
-                IndexManifestEntry {
-                    version: 1,
-                    kind: FileKind::Add,
-                    partition: vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    bucket: 0,
-                    index_file: IndexFileMeta {
-                        index_type: "HASH".into(),
-                        file_name: "index-a984b43a-c3fb-40b4-ad29-536343c239a6-0".into(),
-                        file_size: 16,
-                        row_count: 4,
-                        deletion_vectors_ranges: None,
-                    }
-                },
-                IndexManifestEntry {
-                    version: 1,
-                    kind: FileKind::Add,
-                    partition: vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    bucket: 0,
-                    index_file: IndexFileMeta {
-                        index_type: "DELETION_VECTORS".into(),
-                        file_name: "index-3f0986c5-4398-449b-be82-95f019d7a748-0".into(),
-                        file_size: 33,
-                        row_count: 1,
-                        deletion_vectors_ranges: Some(IndexMap::from([(
-                            "data-9b76122c-6bb5-4952-a946-b5bce29694a1-0.orc".into(),
-                            (1, 24)
-                        )])),
-                    }
+            vec![IndexManifestEntry {
+                version: 1,
+                kind: FileKind::Add,
+                partition: vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                bucket: 0,
+                index_file: IndexFileMeta {
+                    index_type: "DELETION_VECTORS".into(),
+                    file_name: "index-4326356b-aad7-4fd8-9d88-2bb6993c8ce9-0".into(),
+                    file_size: 35,
+                    row_count: 1,
+                    deletion_vectors_ranges: Some(IndexMap::from([(
+                        "data-a989fc44-a361-42c2-801f-e50baba95a92-0.parquet".into(),
+                        DeletionVectorMeta {
+                            offset: 1,
+                            length: 26,
+                            cardinality: Some(3),
+                        }
+                    )])),
                 }
-            ]
+            }]
         );
     }
 
@@ -153,7 +137,14 @@ mod tests {
                 file_name: "test1".into(),
                 file_size: 33,
                 row_count: 1,
-                deletion_vectors_ranges: Some(IndexMap::from([("test1".into(), (1, 24))])),
+                deletion_vectors_ranges: Some(IndexMap::from([(
+                    "test1".into(),
+                    DeletionVectorMeta {
+                        offset: 1,
+                        length: 24,
+                        cardinality: Some(7),
+                    },
+                )])),
             },
         };
 
@@ -180,7 +171,8 @@ mod tests {
                             "fields": [
                                 {"name": "f0", "type": "string"}, 
                                 {"name": "f1", "type": "int"}, 
-                                {"name": "f2", "type": "int"}
+                                {"name": "f2", "type": "int"},
+                                {"name": "_CARDINALITY", "type": ["null", "long"], "default": null}
                             ]
                         }]
                     }]

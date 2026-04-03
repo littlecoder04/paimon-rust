@@ -20,6 +20,13 @@ use std::fmt::{Display, Formatter};
 
 use indexmap::IndexMap;
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeletionVectorMeta {
+    pub offset: i32,
+    pub length: i32,
+    pub cardinality: Option<i64>,
+}
+
 /// Metadata of index file.
 ///
 /// Impl Reference: <https://github.com/apache/paimon/blob/release-0.8.2/paimon-core/src/main/java/org/apache/paimon/index/IndexFileMeta.java>
@@ -44,7 +51,7 @@ pub struct IndexFileMeta {
         rename = "_DELETIONS_VECTORS_RANGES",
         alias = "_DELETION_VECTORS_RANGES"
     )]
-    pub deletion_vectors_ranges: Option<IndexMap<String, (i32, i32)>>,
+    pub deletion_vectors_ranges: Option<IndexMap<String, DeletionVectorMeta>>,
 }
 
 impl Display for IndexFileMeta {
@@ -65,26 +72,31 @@ mod map_serde {
     use indexmap::IndexMap;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+    use super::DeletionVectorMeta;
+
     #[derive(Deserialize, Serialize)]
     struct Temp {
         f0: String,
         f1: i32,
         f2: i32,
+        #[serde(default, rename = "_CARDINALITY")]
+        cardinality: Option<i64>,
     }
 
     pub fn serialize<S>(
-        date: &Option<IndexMap<String, (i32, i32)>>,
+        data: &Option<IndexMap<String, DeletionVectorMeta>>,
         s: S,
     ) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        match *date {
+        match data {
             None => s.serialize_none(),
-            Some(ref d) => s.collect_seq(d.iter().map(|(s, (i1, i2))| Temp {
-                f0: s.into(),
-                f1: *i1,
-                f2: *i2,
+            Some(d) => s.collect_seq(d.iter().map(|(path, meta)| Temp {
+                f0: path.clone(),
+                f1: meta.offset,
+                f2: meta.length,
+                cardinality: meta.cardinality,
             })),
         }
     }
@@ -92,7 +104,7 @@ mod map_serde {
     #[allow(clippy::type_complexity)]
     pub fn deserialize<'de, D>(
         deserializer: D,
-    ) -> Result<Option<IndexMap<String, (i32, i32)>>, D::Error>
+    ) -> Result<Option<IndexMap<String, DeletionVectorMeta>>, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -100,7 +112,16 @@ mod map_serde {
             None => Ok(None),
             Some::<Vec<Temp>>(s) => Ok(Some(
                 s.into_iter()
-                    .map(|t| (t.f0, (t.f1, t.f2)))
+                    .map(|t| {
+                        (
+                            t.f0,
+                            DeletionVectorMeta {
+                                offset: t.f1,
+                                length: t.f2,
+                                cardinality: t.cardinality,
+                            },
+                        )
+                    })
                     .collect::<IndexMap<_, _>>(),
             )),
         }

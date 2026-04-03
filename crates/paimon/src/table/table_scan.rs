@@ -113,15 +113,14 @@ fn build_deletion_files_map(
         let key = PartitionBucket::new(entry.partition.clone(), entry.bucket);
         let dv_path = format!("{}/{}", index_path_prefix, entry.index_file.file_name);
         let per_bucket = map.entry(key).or_default();
-        for (data_file_name, (offset, length)) in ranges {
+        for (data_file_name, meta) in ranges {
             per_bucket.insert(
                 data_file_name.clone(),
                 DeletionFile::new(
                     dv_path.clone(),
-                    *offset as i64,
-                    *length as i64,
-                    // todo: consider cardinality
-                    None,
+                    meta.offset as i64,
+                    meta.length as i64,
+                    meta.cardinality,
                 ),
             );
         }
@@ -513,9 +512,11 @@ impl<'a> TableScan<'a> {
 mod tests {
     use super::{group_by_overlapping_row_id, partition_matches_predicate};
     use crate::spec::{
-        stats::BinaryTableStats, ArrayType, DataField, DataFileMeta, DataType, Datum, IntType,
-        Predicate, PredicateBuilder, PredicateOperator, VarCharType,
+        stats::BinaryTableStats, ArrayType, DataField, DataFileMeta, DataType, Datum,
+        DeletionVectorMeta, FileKind, IndexFileMeta, IndexManifestEntry, IntType, Predicate,
+        PredicateBuilder, PredicateOperator, VarCharType,
     };
+    use crate::table::source::DeletionFile;
     use crate::Error;
     use chrono::{DateTime, Utc};
 
@@ -717,5 +718,43 @@ mod tests {
         assert_eq!(groups.len(), 1);
         // Sorted by descending max_sequence_number: b(3), c(2), a(1)
         assert_eq!(file_names(&groups), vec![vec!["b", "c", "a"]]);
+    }
+
+    #[test]
+    fn test_build_deletion_files_map_preserves_cardinality() {
+        let entries = vec![IndexManifestEntry {
+            version: 1,
+            kind: FileKind::Add,
+            partition: vec![1, 2, 3],
+            bucket: 7,
+            index_file: IndexFileMeta {
+                index_type: "DELETION_VECTORS".into(),
+                file_name: "index-file".into(),
+                file_size: 128,
+                row_count: 1,
+                deletion_vectors_ranges: Some(indexmap::IndexMap::from([(
+                    "data-file.parquet".into(),
+                    DeletionVectorMeta {
+                        offset: 11,
+                        length: 22,
+                        cardinality: Some(33),
+                    },
+                )])),
+            },
+        }];
+
+        let map = super::build_deletion_files_map(&entries, "file:/tmp/table");
+
+        let by_bucket = map
+            .get(&super::PartitionBucket::new(vec![1, 2, 3], 7))
+            .expect("partition bucket should exist");
+        let deletion_file = by_bucket
+            .get("data-file.parquet")
+            .expect("deletion file should exist");
+
+        assert_eq!(
+            deletion_file,
+            &DeletionFile::new("file:/tmp/table/index/index-file".into(), 11, 22, Some(33))
+        );
     }
 }
