@@ -23,6 +23,8 @@ const SOURCE_SPLIT_TARGET_SIZE_OPTION: &str = "source.split.target-size";
 const SOURCE_SPLIT_OPEN_FILE_COST_OPTION: &str = "source.split.open-file-cost";
 const PARTITION_DEFAULT_NAME_OPTION: &str = "partition.default-name";
 const PARTITION_LEGACY_NAME_OPTION: &str = "partition.legacy-name";
+pub const SCAN_SNAPSHOT_ID_OPTION: &str = "scan.snapshot-id";
+pub const SCAN_TIMESTAMP_MILLIS_OPTION: &str = "scan.timestamp-millis";
 const DEFAULT_SOURCE_SPLIT_TARGET_SIZE: i64 = 128 * 1024 * 1024;
 const DEFAULT_SOURCE_SPLIT_OPEN_FILE_COST: i64 = 4 * 1024 * 1024;
 const DEFAULT_PARTITION_DEFAULT_NAME: &str = "__DEFAULT_PARTITION__";
@@ -87,6 +89,20 @@ impl<'a> CoreOptions<'a> {
             .get(PARTITION_LEGACY_NAME_OPTION)
             .map(|v| v.eq_ignore_ascii_case("true"))
             .unwrap_or(true)
+    }
+
+    /// Snapshot id for time travel via `scan.snapshot-id`.
+    pub fn scan_snapshot_id(&self) -> Option<i64> {
+        self.options
+            .get(SCAN_SNAPSHOT_ID_OPTION)
+            .and_then(|v| v.parse().ok())
+    }
+
+    /// Timestamp in millis for time travel via `scan.timestamp-millis`.
+    pub fn scan_timestamp_millis(&self) -> Option<i64> {
+        self.options
+            .get(SCAN_TIMESTAMP_MILLIS_OPTION)
+            .and_then(|v| v.parse().ok())
     }
 }
 
