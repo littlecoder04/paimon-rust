@@ -222,7 +222,6 @@ impl<'a> ReadBuilder<'a> {
             }
 
             if name == crate::spec::ROW_ID_FIELD_NAME {
-                // Virtual _ROW_ID column: computed at read time from first_row_id + offset.
                 resolved.push(DataField::new(
                     crate::spec::ROW_ID_FIELD_ID,
                     crate::spec::ROW_ID_FIELD_NAME.to_string(),

@@ -219,8 +219,6 @@ impl ArrowReader {
         let schema_manager = self.schema_manager;
         let table_schema_id = self.table_schema_id;
 
-        // Check if _ROW_ID is requested; if so, strip it from the file read type
-        // and compute it after reading.
         let row_id_index = read_type.iter().position(|f| f.name() == ROW_ID_FIELD_NAME);
         let file_read_type: Vec<DataField> = read_type
             .iter()
@@ -242,13 +240,9 @@ impl ArrowReader {
                             None
                         };
 
-                        // Skip row_ranges for files without first_row_id (fail-open)
                         let has_row_id = file_meta.first_row_id.is_some();
                         let effective_row_ranges = if has_row_id { row_ranges.clone() } else { None };
 
-                        // Pre-compute selected row IDs for _ROW_ID column.
-                        // RowSelection is always applied at Parquet level for IO optimization.
-                        // The row ID sequence matches the rows that survive RowSelection.
                         let selected_row_ids = if row_id_index.is_some() && has_row_id {
                             Some(expand_selected_row_ids(
                                 file_meta.first_row_id.unwrap(),
@@ -284,7 +278,6 @@ impl ArrowReader {
                                     let array: Arc<dyn arrow_array::Array> = Arc::new(Int64Array::from(batch_ids.to_vec()));
                                     yield insert_column_at(batch, array, idx, &output_schema)?;
                                 } else {
-                                    // No first_row_id: fill _ROW_ID with nulls
                                     yield append_null_row_id_column(batch, idx, &output_schema)?;
                                 }
                             } else {
@@ -1455,7 +1448,6 @@ fn exact_parquet_value<'a, T>(
 }
 
 /// Expand row_ranges into a flat sequence of selected row IDs for a file.
-/// When row_ranges is None, returns all row IDs [first_row_id, first_row_id + row_count).
 fn expand_selected_row_ids(
     first_row_id: i64,
     row_count: i64,
@@ -1526,7 +1518,6 @@ fn build_row_ranges_selection(
         .iter()
         .filter_map(|r| {
             let local_start = (r.from() - file_first_row_id).max(0) as usize;
-            // Clamp to() to file boundary before +1 to avoid i64 overflow when to() == i64::MAX
             let clamped_to = r.to().min(file_first_row_id.saturating_add(total_rows - 1));
             let local_end = (clamped_to + 1 - file_first_row_id) as usize;
             if local_start < local_end {
