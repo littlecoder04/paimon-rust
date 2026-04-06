@@ -107,7 +107,7 @@ pub fn merge_row_ranges(mut ranges: Vec<RowRange>) -> Vec<RowRange> {
     let mut current = ranges[0].clone();
     for r in &ranges[1..] {
         // Adjacent or overlapping: [0,5] and [6,10] should merge to [0,10]
-        if r.from <= current.to + 1 {
+        if r.from <= current.to.saturating_add(1) {
             current.to = current.to.max(r.to);
         } else {
             merged.push(current);
