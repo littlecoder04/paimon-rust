@@ -150,7 +150,11 @@ impl<'a> ReadBuilder<'a> {
 
     /// Set row ID ranges `[from, to]` (inclusive) for filtering in data evolution mode.
     pub fn with_row_ranges(&mut self, ranges: Vec<RowRange>) -> &mut Self {
-        self.row_ranges = Some(ranges);
+        self.row_ranges = if ranges.is_empty() {
+            None
+        } else {
+            Some(ranges)
+        };
         self
     }
 

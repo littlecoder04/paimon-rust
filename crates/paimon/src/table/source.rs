@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 /// Both `from` and `to` are inclusive, aligned with Java's `Range` class.
 ///
 /// Reference: Java's `org.apache.paimon.utils.Range` and pypaimon's `IndexedSplit` with `row_ranges`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RowRange {
     from: i64,
     to: i64,

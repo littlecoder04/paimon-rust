@@ -667,26 +667,35 @@ impl<'a> TableScan<'a> {
                         .collect::<Vec<Option<DeletionFile>>>()
                 });
 
+                // Compute row_ranges before moving file_group to avoid clone
+                let split_row_ranges = if let Some(ref ranges) = self.row_ranges {
+                    let mut split_ranges = Vec::new();
+                    for file in &file_group {
+                        split_ranges.extend(intersect_ranges_with_file(ranges, file));
+                    }
+                    let split_ranges = merge_row_ranges(split_ranges);
+                    if split_ranges.is_empty() {
+                        None
+                    } else {
+                        Some(split_ranges)
+                    }
+                } else {
+                    None
+                };
+
                 let mut builder = DataSplitBuilder::new()
                     .with_snapshot(snapshot_id)
                     .with_partition(partition_row.clone())
                     .with_bucket(bucket)
                     .with_bucket_path(bucket_path.clone())
                     .with_total_buckets(total_buckets)
-                    .with_data_files(file_group.clone())
+                    .with_data_files(file_group)
                     .with_raw_convertible(raw_convertible);
                 if let Some(files) = data_deletion_files {
                     builder = builder.with_data_deletion_files(files);
                 }
-                if let Some(ref ranges) = self.row_ranges {
-                    let mut split_ranges = Vec::new();
-                    for file in &file_group {
-                        split_ranges.extend(intersect_ranges_with_file(ranges, file));
-                    }
-                    let split_ranges = merge_row_ranges(split_ranges);
-                    if !split_ranges.is_empty() {
-                        builder = builder.with_row_ranges(split_ranges);
-                    }
+                if let Some(row_ranges) = split_row_ranges {
+                    builder = builder.with_row_ranges(row_ranges);
                 }
                 splits.push(builder.build()?);
             }

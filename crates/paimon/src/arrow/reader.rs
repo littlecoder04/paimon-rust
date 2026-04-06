@@ -232,7 +232,6 @@ impl ArrowReader {
         Ok(try_stream! {
             for split in splits {
                 let row_ranges = split.row_ranges().map(|r| r.to_vec());
-                let file_row_ranges = if row_id_index.is_some() { None } else { row_ranges.clone() };
 
                 if split.raw_convertible() || split.data_files().len() == 1 {
                     for file_meta in split.data_files().to_vec() {
@@ -245,9 +244,21 @@ impl ArrowReader {
 
                         // Skip row_ranges for files without first_row_id (fail-open)
                         let has_row_id = file_meta.first_row_id.is_some();
-                        let file_base_row_id = file_meta.first_row_id.unwrap_or(0);
-                        let mut current_row_id = file_base_row_id;
-                        let effective_row_ranges = if has_row_id { file_row_ranges.clone() } else { None };
+                        let effective_row_ranges = if has_row_id { row_ranges.clone() } else { None };
+
+                        // Pre-compute selected row IDs for _ROW_ID column.
+                        // RowSelection is always applied at Parquet level for IO optimization.
+                        // The row ID sequence matches the rows that survive RowSelection.
+                        let selected_row_ids = if row_id_index.is_some() && has_row_id {
+                            Some(expand_selected_row_ids(
+                                file_meta.first_row_id.unwrap(),
+                                file_meta.row_count,
+                                &effective_row_ranges,
+                            ))
+                        } else {
+                            None
+                        };
+                        let mut row_id_offset: usize = 0;
 
                         let mut stream = read_single_file_stream(
                             file_io.clone(),
@@ -267,21 +278,18 @@ impl ArrowReader {
                             let batch = batch?;
                             let num_rows = batch.num_rows();
                             if let Some(idx) = row_id_index {
-                                if has_row_id {
-                                    let batch = append_row_id_column(batch, current_row_id, idx, &output_schema)?;
-                                    let batch = filter_batch_by_row_id_ranges(&batch, idx, &row_ranges)?;
-                                    if batch.num_rows() > 0 {
-                                        yield batch;
-                                    }
+                                if let Some(ref ids) = selected_row_ids {
+                                    let batch_ids = &ids[row_id_offset..row_id_offset + num_rows];
+                                    row_id_offset += num_rows;
+                                    let array: Arc<dyn arrow_array::Array> = Arc::new(Int64Array::from(batch_ids.to_vec()));
+                                    yield insert_column_at(batch, array, idx, &output_schema)?;
                                 } else {
                                     // No first_row_id: fill _ROW_ID with nulls
-                                    let batch = append_null_row_id_column(batch, idx, &output_schema)?;
-                                    yield batch;
+                                    yield append_null_row_id_column(batch, idx, &output_schema)?;
                                 }
                             } else {
                                 yield batch;
                             }
-                            current_row_id += num_rows as i64;
                         }
                     }
                 } else {
@@ -291,7 +299,19 @@ impl ArrowReader {
                         .filter_map(|f| f.first_row_id)
                         .min();
                     let has_group_row_id = group_base_row_id.is_some();
-                    let mut current_row_id = group_base_row_id.unwrap_or(0);
+                    let group_row_count = split.data_files().iter().map(|f| f.row_count).max().unwrap_or(0);
+                    let effective_row_ranges = if has_group_row_id { row_ranges.clone() } else { None };
+
+                    let selected_row_ids = if row_id_index.is_some() && has_group_row_id {
+                        Some(expand_selected_row_ids(
+                            group_base_row_id.unwrap(),
+                            group_row_count,
+                            &effective_row_ranges,
+                        ))
+                    } else {
+                        None
+                    };
+                    let mut row_id_offset: usize = 0;
 
                     // Multiple files need column-wise merge.
                     let mut merge_stream = merge_files_by_columns(
@@ -302,26 +322,23 @@ impl ArrowReader {
                         schema_manager.clone(),
                         table_schema_id,
                         batch_size,
-                        if has_group_row_id { file_row_ranges.clone() } else { None },
+                        effective_row_ranges,
                     )?;
                     while let Some(batch) = merge_stream.next().await {
                         let batch = batch?;
                         let num_rows = batch.num_rows();
                         if let Some(idx) = row_id_index {
-                            if has_group_row_id {
-                                let batch = append_row_id_column(batch, current_row_id, idx, &output_schema)?;
-                                let batch = filter_batch_by_row_id_ranges(&batch, idx, &row_ranges)?;
-                                if batch.num_rows() > 0 {
-                                    yield batch;
-                                }
+                            if let Some(ref ids) = selected_row_ids {
+                                let batch_ids = &ids[row_id_offset..row_id_offset + num_rows];
+                                row_id_offset += num_rows;
+                                let array: Arc<dyn arrow_array::Array> = Arc::new(Int64Array::from(batch_ids.to_vec()));
+                                yield insert_column_at(batch, array, idx, &output_schema)?;
                             } else {
-                                let batch = append_null_row_id_column(batch, idx, &output_schema)?;
-                                yield batch;
+                                yield append_null_row_id_column(batch, idx, &output_schema)?;
                             }
                         } else {
                             yield batch;
                         }
-                        current_row_id += num_rows as i64;
                     }
                 }
             }
@@ -1437,45 +1454,28 @@ fn exact_parquet_value<'a, T>(
     }
 }
 
-/// Filter a batch by row_ranges using the _ROW_ID column values.
-/// Keeps only rows whose _ROW_ID falls within any of the given ranges.
-fn filter_batch_by_row_id_ranges(
-    batch: &RecordBatch,
-    row_id_col_index: usize,
+/// Expand row_ranges into a flat sequence of selected row IDs for a file.
+/// When row_ranges is None, returns all row IDs [first_row_id, first_row_id + row_count).
+fn expand_selected_row_ids(
+    first_row_id: i64,
+    row_count: i64,
     row_ranges: &Option<Vec<RowRange>>,
-) -> crate::Result<RecordBatch> {
-    let ranges = match row_ranges {
-        Some(r) => r,
-        None => return Ok(batch.clone()),
-    };
-
-    let row_id_array = batch
-        .column(row_id_col_index)
-        .as_any()
-        .downcast_ref::<Int64Array>()
-        .ok_or_else(|| Error::UnexpectedError {
-            message: "_ROW_ID column is not Int64".to_string(),
-            source: None,
-        })?;
-
-    let mut mask = vec![false; batch.num_rows()];
-    for (i, &row_id) in row_id_array.values().iter().enumerate() {
-        if ranges
-            .iter()
-            .any(|r| row_id >= r.from() && row_id <= r.to())
-        {
-            mask[i] = true;
+) -> Vec<i64> {
+    let file_end = first_row_id + row_count - 1;
+    match row_ranges {
+        None => (first_row_id..=file_end).collect(),
+        Some(ranges) => {
+            let mut ids = Vec::new();
+            for r in ranges {
+                let from = r.from().max(first_row_id);
+                let to = r.to().min(file_end);
+                for id in from..=to {
+                    ids.push(id);
+                }
+            }
+            ids
         }
     }
-
-    let filter = BooleanArray::from(mask);
-    let filtered = arrow_select::filter::filter_record_batch(batch, &filter).map_err(|e| {
-        Error::UnexpectedError {
-            message: format!("Failed to filter batch by _ROW_ID ranges: {e}"),
-            source: Some(Box::new(e)),
-        }
-    })?;
-    Ok(filtered)
 }
 
 /// Insert a column into a RecordBatch at the given position.
@@ -1501,20 +1501,6 @@ fn insert_column_at(
     })
 }
 
-/// Append a computed `_ROW_ID` column. Each row's value is `base_row_id + offset`.
-fn append_row_id_column(
-    batch: RecordBatch,
-    base_row_id: i64,
-    insert_index: usize,
-    output_schema: &Arc<arrow_schema::Schema>,
-) -> crate::Result<RecordBatch> {
-    let row_ids: Vec<i64> = (0..batch.num_rows() as i64)
-        .map(|i| base_row_id + i)
-        .collect();
-    let array: Arc<dyn arrow_array::Array> = Arc::new(Int64Array::from(row_ids));
-    insert_column_at(batch, array, insert_index, output_schema)
-}
-
 /// Append a null `_ROW_ID` column for files without `first_row_id`.
 fn append_null_row_id_column(
     batch: RecordBatch,
@@ -1532,13 +1518,16 @@ fn build_row_ranges_selection(
     file_first_row_id: i64,
 ) -> RowSelection {
     let total_rows: i64 = row_group_metadata_list.iter().map(|rg| rg.num_rows()).sum();
+    if total_rows == 0 {
+        return vec![].into();
+    }
 
     let mut local_ranges: Vec<(usize, usize)> = row_ranges
         .iter()
         .filter_map(|r| {
             let local_start = (r.from() - file_first_row_id).max(0) as usize;
             // Clamp to() to file boundary before +1 to avoid i64 overflow when to() == i64::MAX
-            let clamped_to = r.to().min(file_first_row_id + total_rows - 1);
+            let clamped_to = r.to().min(file_first_row_id.saturating_add(total_rows - 1));
             let local_end = (clamped_to + 1 - file_first_row_id) as usize;
             if local_start < local_end {
                 Some((local_start, local_end))
