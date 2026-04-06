@@ -607,7 +607,7 @@ async fn test_select_row_id_from_data_evolution_table() {
     let ctx = create_context("data_evolution_table").await;
 
     let batches = ctx
-        .sql("SELECT _ROW_ID, id, name FROM data_evolution_table")
+        .sql(r#"SELECT "_ROW_ID", id, name FROM data_evolution_table"#)
         .await
         .expect("SQL should parse")
         .collect()
@@ -643,7 +643,7 @@ async fn test_filter_row_id_from_data_evolution_table() {
     let ctx = create_context("data_evolution_table").await;
 
     let all_batches = ctx
-        .sql("SELECT _ROW_ID FROM data_evolution_table")
+        .sql(r#"SELECT "_ROW_ID" FROM data_evolution_table"#)
         .await
         .expect("SQL")
         .collect()
@@ -652,7 +652,7 @@ async fn test_filter_row_id_from_data_evolution_table() {
     let all_count: usize = all_batches.iter().map(|b| b.num_rows()).sum();
 
     let filtered_batches = ctx
-        .sql("SELECT _ROW_ID, id FROM data_evolution_table WHERE _ROW_ID = 0")
+        .sql(r#"SELECT "_ROW_ID", id FROM data_evolution_table WHERE "_ROW_ID" = 0"#)
         .await
         .expect("SQL")
         .collect()
