@@ -49,10 +49,6 @@ impl RowRange {
         self.to - self.from + 1
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.from > self.to
-    }
-
     /// Check overlap with an inclusive file range `[file_start, file_end]`.
     pub fn overlaps_inclusive(&self, file_start: i64, file_end_inclusive: i64) -> bool {
         self.from <= file_end_inclusive && self.to >= file_start
@@ -340,7 +336,6 @@ mod row_range_tests {
     fn test_row_range_count_and_empty() {
         let r = RowRange::new(5, 10);
         assert_eq!(r.count(), 6); // rows 5,6,7,8,9,10
-        assert!(!r.is_empty());
     }
 }
 

@@ -164,10 +164,6 @@ impl DataField {
         self
     }
 
-    pub fn is_row_id_field(&self) -> bool {
-        self.name == ROW_ID_FIELD_NAME
-    }
-
     pub fn with_description(mut self, new_description: Option<String>) -> Self {
         self.description = new_description;
         self
