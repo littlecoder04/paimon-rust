@@ -26,6 +26,7 @@ use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, Partitioning, PlanProperties};
 use futures::{StreamExt, TryStreamExt};
+use paimon::spec::Predicate;
 use paimon::table::Table;
 use paimon::DataSplit;
 
@@ -41,6 +42,9 @@ pub struct PaimonTableScan {
     table: Table,
     /// Projected column names (if None, reads all columns).
     projected_columns: Option<Vec<String>>,
+    /// Filter translated from DataFusion expressions and reused during execute()
+    /// so reader-side pruning reaches the actual read path.
+    pushed_predicate: Option<Predicate>,
     /// Pre-planned partition assignments: `planned_partitions[i]` contains the
     /// Paimon splits that DataFusion partition `i` will read.
     /// Wrapped in `Arc` to avoid deep-cloning `DataSplit` metadata in `execute()`.
@@ -55,6 +59,7 @@ impl PaimonTableScan {
         schema: ArrowSchemaRef,
         table: Table,
         projected_columns: Option<Vec<String>>,
+        pushed_predicate: Option<Predicate>,
         planned_partitions: Vec<Arc<[DataSplit]>>,
         limit: Option<usize>,
     ) -> Self {
@@ -67,6 +72,7 @@ impl PaimonTableScan {
         Self {
             table,
             projected_columns,
+            pushed_predicate,
             planned_partitions,
             plan_properties,
             limit,
@@ -80,6 +86,11 @@ impl PaimonTableScan {
     #[cfg(test)]
     pub(crate) fn planned_partitions(&self) -> &[Arc<[DataSplit]>] {
         &self.planned_partitions
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pushed_predicate(&self) -> Option<&Predicate> {
+        self.pushed_predicate.as_ref()
     }
 
     pub fn limit(&self) -> Option<usize> {
@@ -126,6 +137,7 @@ impl ExecutionPlan for PaimonTableScan {
         let table = self.table.clone();
         let schema = self.schema();
         let projected_columns = self.projected_columns.clone();
+        let pushed_predicate = self.pushed_predicate.clone();
 
         let fut = async move {
             let mut read_builder = table.new_read_builder();
@@ -133,6 +145,9 @@ impl ExecutionPlan for PaimonTableScan {
             if let Some(ref columns) = projected_columns {
                 let col_refs: Vec<&str> = columns.iter().map(|s| s.as_str()).collect();
                 read_builder.with_projection(&col_refs);
+            }
+            if let Some(filter) = pushed_predicate {
+                read_builder.with_filter(filter);
             }
 
             let read = read_builder.new_read().map_err(to_datafusion_error)?;
@@ -173,11 +188,26 @@ impl DisplayAs for PaimonTableScan {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
+    mod test_utils {
+        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../test_utils.rs"));
+    }
+
+    use datafusion::arrow::array::Int32Array;
+    use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
     use datafusion::physical_plan::ExecutionPlan;
+    use datafusion::prelude::SessionContext;
+    use futures::TryStreamExt;
+    use paimon::catalog::Identifier;
+    use paimon::io::FileIOBuilder;
+    use paimon::spec::{
+        BinaryRow, DataType, Datum, IntType, PredicateBuilder, Schema as PaimonSchema, TableSchema,
+    };
+    use std::fs;
+    use tempfile::tempdir;
+    use test_utils::{local_file_path, test_data_file, write_int_parquet_file};
 
     fn test_schema() -> ArrowSchemaRef {
-        Arc::new(Schema::new(vec![Field::new(
+        Arc::new(ArrowSchema::new(vec![Field::new(
             "id",
             ArrowDataType::Int32,
             false,
@@ -190,6 +220,7 @@ mod tests {
         let scan = PaimonTableScan::new(
             schema,
             dummy_table(),
+            None,
             None,
             vec![Arc::from(Vec::new())],
             None,
@@ -205,19 +236,16 @@ mod tests {
             Arc::from(Vec::new()),
             Arc::from(Vec::new()),
         ];
-        let scan = PaimonTableScan::new(schema, dummy_table(), None, planned_partitions, None);
+        let scan =
+            PaimonTableScan::new(schema, dummy_table(), None, None, planned_partitions, None);
         assert_eq!(scan.properties().output_partitioning().partition_count(), 3);
     }
 
     /// Constructs a minimal Table for testing (no real files needed since we
     /// only test PlanProperties, not actual reads).
     fn dummy_table() -> Table {
-        use paimon::catalog::Identifier;
-        use paimon::io::FileIOBuilder;
-        use paimon::spec::{Schema, TableSchema};
-
         let file_io = FileIOBuilder::new("file").build().unwrap();
-        let schema = Schema::builder().build().unwrap();
+        let schema = PaimonSchema::builder().build().unwrap();
         let table_schema = TableSchema::new(0, &schema);
         Table::new(
             file_io,
@@ -225,5 +253,84 @@ mod tests {
             "/tmp/test-table".to_string(),
             table_schema,
         )
+    }
+
+    #[tokio::test]
+    async fn test_execute_applies_pushed_filter_during_read() {
+        let tempdir = tempdir().unwrap();
+        let table_path = local_file_path(tempdir.path());
+        let bucket_dir = tempdir.path().join("bucket-0");
+        fs::create_dir_all(&bucket_dir).unwrap();
+
+        write_int_parquet_file(
+            &bucket_dir.join("data.parquet"),
+            vec![("id", vec![1, 2, 3, 4]), ("value", vec![5, 20, 30, 40])],
+            Some(2),
+        );
+
+        let file_io = FileIOBuilder::new("file").build().unwrap();
+        let table_schema = TableSchema::new(
+            0,
+            &paimon::spec::Schema::builder()
+                .column("id", DataType::Int(IntType::new()))
+                .column("value", DataType::Int(IntType::new()))
+                .build()
+                .unwrap(),
+        );
+        let table = Table::new(
+            file_io,
+            Identifier::new("default", "t"),
+            table_path,
+            table_schema,
+        );
+
+        let split = paimon::DataSplitBuilder::new()
+            .with_snapshot(1)
+            .with_partition(BinaryRow::new(0))
+            .with_bucket(0)
+            .with_bucket_path(local_file_path(&bucket_dir))
+            .with_total_buckets(1)
+            .with_data_files(vec![test_data_file("data.parquet", 4)])
+            .with_raw_convertible(true)
+            .build()
+            .unwrap();
+
+        let pushed_predicate = PredicateBuilder::new(table.schema().fields())
+            .greater_or_equal("value", Datum::Int(10))
+            .unwrap();
+
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            ArrowDataType::Int32,
+            false,
+        )]));
+        let scan = PaimonTableScan::new(
+            schema,
+            table,
+            Some(vec!["id".to_string()]),
+            Some(pushed_predicate),
+            vec![Arc::from(vec![split])],
+            None,
+        );
+
+        let ctx = SessionContext::new();
+        let stream = scan
+            .execute(0, ctx.task_ctx())
+            .expect("execute should succeed");
+        let batches = stream.try_collect::<Vec<_>>().await.unwrap();
+
+        let actual_ids: Vec<i32> = batches
+            .iter()
+            .flat_map(|batch| {
+                let ids = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .expect("id column should be Int32Array");
+                (0..ids.len()).map(|idx| ids.value(idx)).collect::<Vec<_>>()
+            })
+            .collect();
+
+        assert_eq!(actual_ids, vec![2, 3, 4]);
     }
 }
