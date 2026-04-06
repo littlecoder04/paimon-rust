@@ -232,9 +232,6 @@ impl ArrowReader {
         Ok(try_stream! {
             for split in splits {
                 let row_ranges = split.row_ranges().map(|r| r.to_vec());
-                // When _ROW_ID is requested, skip Parquet-level row_ranges filtering
-                // because RowSelection changes which rows appear in the output,
-                // making positional _ROW_ID tracking incorrect.
                 let file_row_ranges = if row_id_index.is_some() { None } else { row_ranges.clone() };
 
                 if split.raw_convertible() || split.data_files().len() == 1 {
