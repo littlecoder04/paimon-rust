@@ -246,8 +246,11 @@ impl ArrowReader {
                             None
                         };
 
+                        // Skip row_ranges for files without first_row_id (fail-open)
+                        let has_row_id = file_meta.first_row_id.is_some();
                         let file_base_row_id = file_meta.first_row_id.unwrap_or(0);
                         let mut current_row_id = file_base_row_id;
+                        let effective_row_ranges = if has_row_id { file_row_ranges.clone() } else { None };
 
                         let mut stream = read_single_file_stream(
                             file_io.clone(),
@@ -260,7 +263,7 @@ impl ArrowReader {
                                 predicates: Vec::new(),
                                 batch_size,
                                 dv: None,
-                                row_ranges: file_row_ranges.clone(),
+                                row_ranges: effective_row_ranges,
                             },
                         )?;
                         while let Some(batch) = stream.next().await {
@@ -268,10 +271,12 @@ impl ArrowReader {
                             let num_rows = batch.num_rows();
                             if let Some(idx) = row_id_index {
                                 let batch = append_row_id_column(batch, current_row_id, idx, &output_schema)?;
-                                // Post-read row_ranges filter: _ROW_ID disables Parquet-level
-                                // filtering, so filter here using the computed _ROW_ID values.
-                                let batch = filter_batch_by_row_id_ranges(&batch, idx, &row_ranges)?;
-                                if batch.num_rows() > 0 {
+                                if has_row_id {
+                                    let batch = filter_batch_by_row_id_ranges(&batch, idx, &row_ranges)?;
+                                    if batch.num_rows() > 0 {
+                                        yield batch;
+                                    }
+                                } else {
                                     yield batch;
                                 }
                             } else {
