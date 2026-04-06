@@ -1478,62 +1478,51 @@ fn filter_batch_by_row_id_ranges(
     Ok(filtered)
 }
 
-/// Append a null `_ROW_ID` column for files without `first_row_id`.
-fn append_null_row_id_column(
+/// Insert a column into a RecordBatch at the given position.
+fn insert_column_at(
     batch: RecordBatch,
+    column: Arc<dyn arrow_array::Array>,
     insert_index: usize,
     output_schema: &Arc<arrow_schema::Schema>,
 ) -> crate::Result<RecordBatch> {
-    let num_rows = batch.num_rows();
-    let null_array: Arc<dyn arrow_array::Array> = Arc::new(Int64Array::new_null(num_rows));
-
     let mut columns: Vec<Arc<dyn arrow_array::Array>> = Vec::with_capacity(batch.num_columns() + 1);
-    let batch_cols: Vec<Arc<dyn arrow_array::Array>> = batch.columns().to_vec();
-
-    for (i, col) in batch_cols.iter().enumerate() {
+    for (i, col) in batch.columns().iter().enumerate() {
         if i == insert_index {
-            columns.push(null_array.clone());
+            columns.push(column.clone());
         }
         columns.push(col.clone());
     }
     if insert_index >= batch.num_columns() {
-        columns.push(null_array);
+        columns.push(column);
     }
-
     RecordBatch::try_new(output_schema.clone(), columns).map_err(|e| Error::UnexpectedError {
-        message: format!("Failed to build RecordBatch with null _ROW_ID column: {e}"),
+        message: format!("Failed to insert column into RecordBatch: {e}"),
         source: Some(Box::new(e)),
     })
 }
 
-/// Append a computed `_ROW_ID` column at the given position. Each row's value is `base_row_id + offset`.
+/// Append a computed `_ROW_ID` column. Each row's value is `base_row_id + offset`.
 fn append_row_id_column(
     batch: RecordBatch,
     base_row_id: i64,
     insert_index: usize,
     output_schema: &Arc<arrow_schema::Schema>,
 ) -> crate::Result<RecordBatch> {
-    let num_rows = batch.num_rows();
-    let row_ids: Vec<i64> = (0..num_rows as i64).map(|i| base_row_id + i).collect();
-    let row_id_array: Arc<dyn arrow_array::Array> = Arc::new(Int64Array::from(row_ids));
+    let row_ids: Vec<i64> = (0..batch.num_rows() as i64)
+        .map(|i| base_row_id + i)
+        .collect();
+    let array: Arc<dyn arrow_array::Array> = Arc::new(Int64Array::from(row_ids));
+    insert_column_at(batch, array, insert_index, output_schema)
+}
 
-    let mut columns: Vec<Arc<dyn arrow_array::Array>> = Vec::with_capacity(batch.num_columns() + 1);
-    let batch_cols: Vec<Arc<dyn arrow_array::Array>> = batch.columns().to_vec();
-
-    for (i, col) in batch_cols.iter().enumerate() {
-        if i == insert_index {
-            columns.push(row_id_array.clone());
-        }
-        columns.push(col.clone());
-    }
-    if insert_index >= batch.num_columns() {
-        columns.push(row_id_array);
-    }
-
-    RecordBatch::try_new(output_schema.clone(), columns).map_err(|e| Error::UnexpectedError {
-        message: format!("Failed to build RecordBatch with _ROW_ID column: {e}"),
-        source: Some(Box::new(e)),
-    })
+/// Append a null `_ROW_ID` column for files without `first_row_id`.
+fn append_null_row_id_column(
+    batch: RecordBatch,
+    insert_index: usize,
+    output_schema: &Arc<arrow_schema::Schema>,
+) -> crate::Result<RecordBatch> {
+    let array: Arc<dyn arrow_array::Array> = Arc::new(Int64Array::new_null(batch.num_rows()));
+    insert_column_at(batch, array, insert_index, output_schema)
 }
 
 /// Build a Parquet [RowSelection] from inclusive `[from, to]` row ranges.
