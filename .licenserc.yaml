@@ -15,24 +15,18 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[workspace]
-resolver = "2"
-members = ["crates/paimon", "crates/integration_tests", "bindings/c", "bindings/python", "crates/integrations/datafusion"]
+header:
+  license:
+    spdx-id: Apache-2.0
+    copyright-owner: Apache Software Foundation
 
-[workspace.package]
-version = "0.0.0"
-edition = "2021"
-homepage = "https://paimon.apache.org/docs/rust/"
-repository = "https://github.com/apache/paimon-rust"
-license = "Apache-2.0"
-rust-version = "1.86.0"
+  paths-ignore:
+    - "LICENSE"
+    - "NOTICE"
+    - ".github/PULL_REQUEST_TEMPLATE.md"
+    - "crates/paimon/tests/**/*.json"
+    - "**/go.sum"
+    - ".devcontainer/devcontainer.json"
+    - "bindings/python/python/pypaimon_rust/py.typed"
 
-[workspace.dependencies]
-arrow = "57.0"
-arrow-array = { version = "57.0", features = ["ffi"] }
-arrow-schema = "57.0"
-arrow-cast = "57.0"
-datafusion = "52.3.0"
-datafusion-ffi = "52.3.0"
-parquet = "57.0"
-tokio = "1.39.2"
+  comment: on-failure

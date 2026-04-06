@@ -15,24 +15,22 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[workspace]
-resolver = "2"
-members = ["crates/paimon", "crates/integration_tests", "bindings/c", "bindings/python", "crates/integrations/datafusion"]
+[package]
+name = "pypaimon_rust"
+publish = false
+edition.workspace = true
+version.workspace = true
+license.workspace = true
 
-[workspace.package]
-version = "0.0.0"
-edition = "2021"
-homepage = "https://paimon.apache.org/docs/rust/"
-repository = "https://github.com/apache/paimon-rust"
-license = "Apache-2.0"
-rust-version = "1.86.0"
+[lib]
+crate-type = ["cdylib"]
+doc = false
 
-[workspace.dependencies]
-arrow = "57.0"
-arrow-array = { version = "57.0", features = ["ffi"] }
-arrow-schema = "57.0"
-arrow-cast = "57.0"
-datafusion = "52.3.0"
-datafusion-ffi = "52.3.0"
-parquet = "57.0"
-tokio = "1.39.2"
+[dependencies]
+arrow = { workspace = true, features = ["pyarrow"] }
+datafusion = { workspace = true }
+datafusion-ffi = { workspace = true }
+paimon = { path = "../../crates/paimon", features = ["storage-all"] }
+paimon-datafusion = { path = "../../crates/integrations/datafusion" }
+pyo3 = { version = "0.26", features = ["abi3-py310"] }
+tokio = { workspace = true }
