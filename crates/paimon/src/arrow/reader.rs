@@ -244,14 +244,18 @@ impl ArrowReader {
                         let effective_row_ranges = if has_row_id { row_ranges.clone() } else { None };
 
                         let selected_row_ids = if row_id_index.is_some() && has_row_id {
-                            Some(expand_selected_row_ids(
-                                file_meta.first_row_id.unwrap(),
-                                file_meta.row_count,
-                                &effective_row_ranges,
-                            ))
+                            effective_row_ranges.as_ref().map(|ranges| {
+                                expand_selected_row_ids(
+                                    file_meta.first_row_id.unwrap(),
+                                    file_meta.row_count,
+                                    ranges,
+                                )
+                            })
                         } else {
                             None
                         };
+                        let file_base_row_id = file_meta.first_row_id.unwrap_or(0);
+                        let mut row_id_cursor = file_base_row_id;
                         let mut row_id_offset: usize = 0;
 
                         let mut stream = read_single_file_stream(
@@ -270,8 +274,18 @@ impl ArrowReader {
                         )?;
                         while let Some(batch) = stream.next().await {
                             let batch = batch?;
+                            let num_rows = batch.num_rows();
                             if let Some(idx) = row_id_index {
-                                yield attach_row_id(batch, idx, &selected_row_ids, &mut row_id_offset, &output_schema)?;
+                                if !has_row_id {
+                                    yield append_null_row_id_column(batch, idx, &output_schema)?;
+                                } else if let Some(ref ids) = selected_row_ids {
+                                    yield attach_row_id(batch, idx, ids, &mut row_id_offset, &output_schema)?;
+                                } else {
+                                    let row_ids: Vec<i64> = (row_id_cursor..row_id_cursor + num_rows as i64).collect();
+                                    row_id_cursor += num_rows as i64;
+                                    let array: Arc<dyn arrow_array::Array> = Arc::new(Int64Array::from(row_ids));
+                                    yield insert_column_at(batch, array, idx, &output_schema)?;
+                                }
                             } else {
                                 yield batch;
                             }
@@ -288,17 +302,19 @@ impl ArrowReader {
                     let effective_row_ranges = if has_group_row_id { row_ranges.clone() } else { None };
 
                     let selected_row_ids = if row_id_index.is_some() && has_group_row_id {
-                        Some(expand_selected_row_ids(
-                            group_base_row_id.unwrap(),
-                            group_row_count,
-                            &effective_row_ranges,
-                        ))
+                        effective_row_ranges.as_ref().map(|ranges| {
+                            expand_selected_row_ids(
+                                group_base_row_id.unwrap(),
+                                group_row_count,
+                                ranges,
+                            )
+                        })
                     } else {
                         None
                     };
+                    let mut row_id_cursor = group_base_row_id.unwrap_or(0);
                     let mut row_id_offset: usize = 0;
 
-                    // Multiple files need column-wise merge.
                     let mut merge_stream = merge_files_by_columns(
                         &file_io,
                         &split,
@@ -313,13 +329,15 @@ impl ArrowReader {
                         let batch = batch?;
                         let num_rows = batch.num_rows();
                         if let Some(idx) = row_id_index {
-                            if let Some(ref ids) = selected_row_ids {
-                                let batch_ids = &ids[row_id_offset..row_id_offset + num_rows];
-                                row_id_offset += num_rows;
-                                let array: Arc<dyn arrow_array::Array> = Arc::new(Int64Array::from(batch_ids.to_vec()));
-                                yield insert_column_at(batch, array, idx, &output_schema)?;
-                            } else {
+                            if !has_group_row_id {
                                 yield append_null_row_id_column(batch, idx, &output_schema)?;
+                            } else if let Some(ref ids) = selected_row_ids {
+                                yield attach_row_id(batch, idx, ids, &mut row_id_offset, &output_schema)?;
+                            } else {
+                                let row_ids: Vec<i64> = (row_id_cursor..row_id_cursor + num_rows as i64).collect();
+                                row_id_cursor += num_rows as i64;
+                                let array: Arc<dyn arrow_array::Array> = Arc::new(Int64Array::from(row_ids));
+                                yield insert_column_at(batch, array, idx, &output_schema)?;
                             }
                         } else {
                             yield batch;
@@ -682,7 +700,7 @@ fn merge_files_by_columns(
             let first_row_id = data_files[0].first_row_id.unwrap_or(0);
             let file_row_count = data_files[0].row_count;
             let total_rows = match &row_ranges {
-                Some(ranges) => expand_selected_row_ids(first_row_id, file_row_count, &Some(ranges.clone())).len(),
+                Some(ranges) => expand_selected_row_ids(first_row_id, file_row_count, ranges).len(),
                 None => file_row_count as usize,
             };
             let mut emitted = 0;
@@ -1444,45 +1462,31 @@ fn exact_parquet_value<'a, T>(
 }
 
 /// Expand row_ranges into a flat sequence of selected row IDs for a file.
-fn expand_selected_row_ids(
-    first_row_id: i64,
-    row_count: i64,
-    row_ranges: &Option<Vec<RowRange>>,
-) -> Vec<i64> {
+fn expand_selected_row_ids(first_row_id: i64, row_count: i64, row_ranges: &[RowRange]) -> Vec<i64> {
     let file_end = first_row_id + row_count - 1;
-    match row_ranges {
-        None => (first_row_id..=file_end).collect(),
-        Some(ranges) => {
-            let mut ids = Vec::new();
-            for r in ranges {
-                let from = r.from().max(first_row_id);
-                let to = r.to().min(file_end);
-                for id in from..=to {
-                    ids.push(id);
-                }
-            }
-            ids
+    let mut ids = Vec::new();
+    for r in row_ranges {
+        let from = r.from().max(first_row_id);
+        let to = r.to().min(file_end);
+        for id in from..=to {
+            ids.push(id);
         }
     }
+    ids
 }
 
-/// Insert a column into a RecordBatch at the given position.
 fn attach_row_id(
     batch: RecordBatch,
     row_id_index: usize,
-    selected_row_ids: &Option<Vec<i64>>,
+    selected_row_ids: &[i64],
     row_id_offset: &mut usize,
     output_schema: &Arc<arrow_schema::Schema>,
 ) -> crate::Result<RecordBatch> {
-    if let Some(ref ids) = selected_row_ids {
-        let num_rows = batch.num_rows();
-        let batch_ids = &ids[*row_id_offset..*row_id_offset + num_rows];
-        *row_id_offset += num_rows;
-        let array: Arc<dyn arrow_array::Array> = Arc::new(Int64Array::from(batch_ids.to_vec()));
-        insert_column_at(batch, array, row_id_index, output_schema)
-    } else {
-        append_null_row_id_column(batch, row_id_index, output_schema)
-    }
+    let num_rows = batch.num_rows();
+    let batch_ids = &selected_row_ids[*row_id_offset..*row_id_offset + num_rows];
+    *row_id_offset += num_rows;
+    let array: Arc<dyn arrow_array::Array> = Arc::new(Int64Array::from(batch_ids.to_vec()));
+    insert_column_at(batch, array, row_id_index, output_schema)
 }
 
 fn insert_column_at(
