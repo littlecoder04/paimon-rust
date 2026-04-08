@@ -35,6 +35,7 @@ storage-memory = ["opendal/services-memory"]
 storage-fs = ["opendal/services-fs"]
 storage-oss = ["opendal/services-oss"]
 storage-s3 = ["opendal/services-s3"]
+lumina = ["libloading"]
 
 [dependencies]
 url = "2.5.2"
@@ -73,6 +74,7 @@ md-5 = "0.10"
 regex = "1"
 uuid = { version = "1", features = ["v4"] }
 urlencoding = "2.1"
+libloading = { version = "0.8", optional = true }
 
 [dev-dependencies]
 axum = { version = "0.7", features = ["macros", "tokio", "http1", "http2"] }

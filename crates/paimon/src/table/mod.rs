@@ -26,6 +26,8 @@ mod source;
 mod stats_filter;
 mod table_scan;
 mod tag_manager;
+#[cfg(feature = "lumina")]
+pub mod vector_search_builder;
 
 use crate::Result;
 use arrow_array::RecordBatch;
