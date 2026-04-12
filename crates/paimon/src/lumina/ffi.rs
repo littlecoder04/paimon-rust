@@ -305,6 +305,161 @@ impl Drop for LuminaSearcher {
     }
 }
 
+pub struct LuminaBuilder {
+    handle: *mut c_void,
+}
+
+unsafe impl Send for LuminaBuilder {}
+
+impl LuminaBuilder {
+    pub fn create(options: &HashMap<String, String>) -> crate::Result<Self> {
+        let lib = load_library()?;
+        let opts_json = options_to_json(options)?;
+        let mut err_buf = [0u8; ERR_BUF_SIZE];
+
+        let handle: *mut c_void = unsafe {
+            let func: Symbol<
+                unsafe extern "C" fn(*const c_char, *mut c_char, c_int) -> *mut c_void,
+            > = lib
+                .get(b"lumina_builder_create")
+                .map_err(|e| crate::Error::DataInvalid {
+                    message: format!("Symbol lumina_builder_create not found: {}", e),
+                    source: None,
+                })?;
+            func(
+                opts_json.as_ptr(),
+                err_buf.as_mut_ptr() as *mut c_char,
+                ERR_BUF_SIZE as c_int,
+            )
+        };
+
+        if handle.is_null() {
+            let c_str = unsafe { CStr::from_ptr(err_buf.as_ptr() as *const c_char) };
+            let msg = c_str.to_string_lossy().to_string();
+            return Err(crate::Error::DataInvalid {
+                message: format!("Failed to create Lumina builder: {}", msg),
+                source: None,
+            });
+        }
+
+        Ok(Self { handle })
+    }
+
+    pub fn pretrain(&self, vectors: &[f32], n: i32, dim: i32) -> crate::Result<()> {
+        let lib = load_library()?;
+        let mut err_buf = [0u8; ERR_BUF_SIZE];
+
+        let ret: c_int = unsafe {
+            let func: Symbol<
+                unsafe extern "C" fn(
+                    *mut c_void,
+                    *const c_float,
+                    c_int,
+                    c_int,
+                    *mut c_char,
+                    c_int,
+                ) -> c_int,
+            > = lib
+                .get(b"lumina_builder_pretrain")
+                .map_err(|e| crate::Error::DataInvalid {
+                    message: format!("Symbol lumina_builder_pretrain not found: {}", e),
+                    source: None,
+                })?;
+            func(
+                self.handle,
+                vectors.as_ptr(),
+                n,
+                dim,
+                err_buf.as_mut_ptr() as *mut c_char,
+                ERR_BUF_SIZE as c_int,
+            )
+        };
+
+        check_error(ret, &err_buf)
+    }
+
+    pub fn insert(&self, vectors: &[f32], ids: &[u64], n: i32, dim: i32) -> crate::Result<()> {
+        let lib = load_library()?;
+        let mut err_buf = [0u8; ERR_BUF_SIZE];
+
+        let ret: c_int = unsafe {
+            let func: Symbol<
+                unsafe extern "C" fn(
+                    *mut c_void,
+                    *const c_float,
+                    *const u64,
+                    c_int,
+                    c_int,
+                    *mut c_char,
+                    c_int,
+                ) -> c_int,
+            > = lib
+                .get(b"lumina_builder_insert")
+                .map_err(|e| crate::Error::DataInvalid {
+                    message: format!("Symbol lumina_builder_insert not found: {}", e),
+                    source: None,
+                })?;
+            func(
+                self.handle,
+                vectors.as_ptr(),
+                ids.as_ptr(),
+                n,
+                dim,
+                err_buf.as_mut_ptr() as *mut c_char,
+                ERR_BUF_SIZE as c_int,
+            )
+        };
+
+        check_error(ret, &err_buf)
+    }
+
+    pub fn dump(&self, path: &str) -> crate::Result<()> {
+        let lib = load_library()?;
+        let c_path =
+            CString::new(path).map_err(|e| crate::Error::DataInvalid {
+                message: format!("Invalid path: {}", e),
+                source: None,
+            })?;
+        let mut err_buf = [0u8; ERR_BUF_SIZE];
+
+        let ret: c_int = unsafe {
+            let func: Symbol<
+                unsafe extern "C" fn(*mut c_void, *const c_char, *mut c_char, c_int) -> c_int,
+            > = lib
+                .get(b"lumina_builder_dump")
+                .map_err(|e| crate::Error::DataInvalid {
+                    message: format!("Symbol lumina_builder_dump not found: {}", e),
+                    source: None,
+                })?;
+            func(
+                self.handle,
+                c_path.as_ptr(),
+                err_buf.as_mut_ptr() as *mut c_char,
+                ERR_BUF_SIZE as c_int,
+            )
+        };
+
+        check_error(ret, &err_buf)
+    }
+}
+
+impl Drop for LuminaBuilder {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            if let Ok(lib) = load_library() {
+                unsafe {
+                    if let Ok(func) =
+                        lib.get::<unsafe extern "C" fn(*mut c_void)>(b"lumina_builder_destroy")
+                    {
+                        func(self.handle);
+                    }
+                }
+            }
+            self.handle = std::ptr::null_mut();
+        }
+    }
+}
+
 struct StreamContext {
     inner: std::sync::Mutex<Box<dyn ReadSeekLen + Send>>,
 }

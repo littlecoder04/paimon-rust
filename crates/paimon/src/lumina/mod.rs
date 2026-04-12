@@ -160,11 +160,18 @@ impl LuminaIndexMeta {
         &self.options
     }
 
-    pub fn dim(&self) -> i32 {
-        self.options
+    pub fn dim(&self) -> crate::Result<i32> {
+        let val = self
+            .options
             .get(KEY_DIMENSION)
-            .and_then(|v| v.parse::<i32>().ok())
-            .unwrap_or(0)
+            .ok_or_else(|| crate::Error::DataInvalid {
+                message: format!("Missing required key: {}", KEY_DIMENSION),
+                source: None,
+            })?;
+        val.parse::<i32>().map_err(|_| crate::Error::DataInvalid {
+            message: format!("Invalid dimension value: {}", val),
+            source: None,
+        })
     }
 
     pub fn distance_metric(&self) -> &str {
@@ -217,5 +224,89 @@ impl LuminaIndexMeta {
             });
         }
         Ok(Self { options })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Aligned with Java: metric conversions tested indirectly in testDifferentMetrics
+    #[test]
+    fn test_metric_roundtrip() {
+        for metric in [
+            LuminaVectorMetric::L2,
+            LuminaVectorMetric::Cosine,
+            LuminaVectorMetric::InnerProduct,
+        ] {
+            let name = metric.lumina_name();
+            assert_eq!(LuminaVectorMetric::from_lumina_name(name).unwrap(), metric);
+            assert_eq!(
+                LuminaVectorMetric::from_string(&name.to_uppercase()).unwrap(),
+                metric
+            );
+        }
+        assert!(LuminaVectorMetric::from_string("hamming").is_err());
+    }
+
+    // Aligned with Java: testReaderMetaOptionsOverrideDefaultOptions
+    #[test]
+    fn test_index_meta_serialize_deserialize() {
+        let mut options = HashMap::new();
+        options.insert(KEY_DIMENSION.to_string(), "128".to_string());
+        options.insert(KEY_DISTANCE_METRIC.to_string(), "l2".to_string());
+        options.insert(KEY_INDEX_TYPE.to_string(), "diskann".to_string());
+        let meta = LuminaIndexMeta::new(options);
+
+        let bytes = meta.serialize().unwrap();
+        let meta2 = LuminaIndexMeta::deserialize(&bytes).unwrap();
+        assert_eq!(meta2.dim().unwrap(), 128);
+        assert_eq!(meta2.distance_metric(), "l2");
+        assert_eq!(meta2.index_type(), "diskann");
+    }
+
+    #[test]
+    fn test_index_meta_deserialize_missing_fields() {
+        // missing dimension
+        let mut opts = HashMap::new();
+        opts.insert(KEY_DISTANCE_METRIC.to_string(), "l2".to_string());
+        assert!(LuminaIndexMeta::deserialize(&serde_json::to_vec(&opts).unwrap()).is_err());
+
+        // missing metric
+        let mut opts = HashMap::new();
+        opts.insert(KEY_DIMENSION.to_string(), "128".to_string());
+        assert!(LuminaIndexMeta::deserialize(&serde_json::to_vec(&opts).unwrap()).is_err());
+
+        // invalid json
+        assert!(LuminaIndexMeta::deserialize(b"not json").is_err());
+    }
+
+    // Aligned with Java: testDimensionMismatch (dim validation)
+    #[test]
+    fn test_dim_error_on_invalid() {
+        let mut opts = HashMap::new();
+        opts.insert(KEY_DIMENSION.to_string(), "abc".to_string());
+        opts.insert(KEY_DISTANCE_METRIC.to_string(), "l2".to_string());
+        assert!(LuminaIndexMeta::new(opts).dim().is_err());
+    }
+
+    // Aligned with Java: testPQWithCosineRejected (options validation)
+    #[test]
+    fn test_index_options_invalid_dimension() {
+        let mut opts = HashMap::new();
+        opts.insert("lumina.index.dimension".to_string(), "-1".to_string());
+        assert!(LuminaVectorIndexOptions::new(&opts).is_err());
+    }
+
+    #[test]
+    fn test_strip_lumina_options() {
+        let mut opts = HashMap::new();
+        opts.insert("lumina.index.dimension".to_string(), "128".to_string());
+        opts.insert("lumina.diskann.search.beam_width".to_string(), "8".to_string());
+        opts.insert("non_lumina_key".to_string(), "ignored".to_string());
+        let result = strip_lumina_options(&opts);
+        assert_eq!(result.get("index.dimension").unwrap(), "128");
+        assert_eq!(result.get("diskann.search.beam_width").unwrap(), "8"); // overrides default
+        assert!(!result.contains_key("non_lumina_key"));
     }
 }

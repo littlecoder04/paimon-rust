@@ -102,3 +102,49 @@ impl VectorSearchBuilder {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dummy_stream_fn(_path: &str) -> crate::Result<std::io::Cursor<Vec<u8>>> {
+        Ok(std::io::Cursor::new(vec![]))
+    }
+
+    #[test]
+    fn execute_local_missing_limit() {
+        let builder = VectorSearchBuilder::new(HashMap::new())
+            .with_vector_column("emb".to_string())
+            .with_query_vector(vec![1.0]);
+        let result = builder.execute_local(vec![], "any", dummy_stream_fn);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn execute_local_missing_vector_column() {
+        let builder = VectorSearchBuilder::new(HashMap::new())
+            .with_limit(10)
+            .with_query_vector(vec![1.0]);
+        let result = builder.execute_local(vec![], "any", dummy_stream_fn);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn execute_local_missing_query_vector() {
+        let builder = VectorSearchBuilder::new(HashMap::new())
+            .with_limit(10)
+            .with_vector_column("emb".to_string());
+        let result = builder.execute_local(vec![], "any", dummy_stream_fn);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn execute_local_unsupported_index_type() {
+        let builder = VectorSearchBuilder::new(HashMap::new())
+            .with_limit(10)
+            .with_vector_column("emb".to_string())
+            .with_query_vector(vec![1.0, 2.0]);
+        let result = builder.execute_local(vec![], "unknown-index", dummy_stream_fn);
+        assert!(result.is_err());
+    }
+}

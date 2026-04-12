@@ -99,7 +99,7 @@ impl LuminaVectorGlobalIndexReader {
         let searcher = self.searcher.as_ref().unwrap();
         let search_options_base = self.search_options.as_ref().unwrap();
 
-        let expected_dim = index_meta.dim() as usize;
+        let expected_dim = index_meta.dim()? as usize;
         if vector_search.vector.len() != expected_dim {
             return Err(crate::Error::DataInvalid {
                 message: format!(
@@ -212,5 +212,57 @@ impl LuminaVectorGlobalIndexReader {
 impl Drop for LuminaVectorGlobalIndexReader {
     fn drop(&mut self) {
         self.close();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::globalindex::GlobalIndexIOMeta;
+
+    // Aligned with Java: testDifferentMetrics — score conversion per metric
+    #[test]
+    fn test_convert_distance_to_score() {
+        assert_eq!(convert_distance_to_score(0.0, LuminaVectorMetric::L2), 1.0);
+        assert_eq!(convert_distance_to_score(1.0, LuminaVectorMetric::L2), 0.5);
+        assert_eq!(convert_distance_to_score(0.0, LuminaVectorMetric::Cosine), 1.0);
+        assert_eq!(convert_distance_to_score(1.0, LuminaVectorMetric::Cosine), 0.0);
+        assert_eq!(convert_distance_to_score(0.75, LuminaVectorMetric::InnerProduct), 0.75);
+    }
+
+    #[test]
+    fn test_ensure_search_list_size() {
+        let mut opts = HashMap::new();
+        ensure_search_list_size(&mut opts, 10);
+        assert_eq!(opts.get("diskann.search.list_size").unwrap(), "16"); // max(15, 16)
+
+        let mut opts = HashMap::new();
+        ensure_search_list_size(&mut opts, 100);
+        assert_eq!(opts.get("diskann.search.list_size").unwrap(), "150"); // 100*1.5
+
+        // does not override existing
+        let mut opts = HashMap::new();
+        opts.insert("diskann.search.list_size".to_string(), "999".to_string());
+        ensure_search_list_size(&mut opts, 100);
+        assert_eq!(opts.get("diskann.search.list_size").unwrap(), "999");
+    }
+
+    #[test]
+    fn test_filter_search_options() {
+        let mut opts = HashMap::new();
+        opts.insert("search.beam_width".to_string(), "4".to_string());
+        opts.insert("diskann.search.list_size".to_string(), "16".to_string());
+        opts.insert("index.dimension".to_string(), "128".to_string());
+        let filtered = filter_search_options(&opts);
+        assert_eq!(filtered.len(), 2);
+        assert!(!filtered.contains_key("index.dimension"));
+    }
+
+    #[test]
+    fn test_reader_requires_exactly_one_meta() {
+        assert!(LuminaVectorGlobalIndexReader::new(vec![], HashMap::new()).is_err());
+        let m1 = GlobalIndexIOMeta::new("a".into(), 100, vec![]);
+        let m2 = GlobalIndexIOMeta::new("b".into(), 200, vec![]);
+        assert!(LuminaVectorGlobalIndexReader::new(vec![m1, m2], HashMap::new()).is_err());
     }
 }

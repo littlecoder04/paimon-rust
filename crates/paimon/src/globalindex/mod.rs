@@ -17,8 +17,9 @@
 
 use roaring::RoaringTreemap;
 use std::collections::BinaryHeap;
+use std::sync::Arc;
 
-pub type ScoreGetter = Box<dyn Fn(u64) -> f32 + Send + Sync>;
+pub type ScoreGetter = Arc<dyn Fn(u64) -> f32 + Send + Sync>;
 
 pub trait GlobalIndexResult: Send + Sync {
     fn results(&self) -> &RoaringTreemap;
@@ -78,10 +79,7 @@ pub trait ScoredGlobalIndexResult: GlobalIndexResult {
         if offset == 0 {
             let bitmap = self.results().clone();
             let sg = self.clone_score_getter();
-            return Box::new(SimpleScoredGlobalIndexResult::new(
-                bitmap,
-                Box::new(move |row_id| sg(row_id - offset)),
-            ));
+            return Box::new(SimpleScoredGlobalIndexResult::new(bitmap, sg));
         }
         let bitmap = self.results();
         let mut offset_bitmap = RoaringTreemap::new();
@@ -91,7 +89,7 @@ pub trait ScoredGlobalIndexResult: GlobalIndexResult {
         let sg = self.clone_score_getter();
         Box::new(SimpleScoredGlobalIndexResult::new(
             offset_bitmap,
-            Box::new(move |row_id| sg(row_id - offset)),
+            Arc::new(move |row_id| sg(row_id - offset)),
         ))
     }
 
@@ -104,7 +102,7 @@ pub trait ScoredGlobalIndexResult: GlobalIndexResult {
         let this_ids = this_row_ids;
         Box::new(SimpleScoredGlobalIndexResult::new(
             result_or,
-            Box::new(move |row_id| {
+            Arc::new(move |row_id| {
                 if this_ids.contains(row_id) {
                     this_sg(row_id)
                 } else {
@@ -185,7 +183,7 @@ impl SimpleScoredGlobalIndexResult {
     pub fn create_empty() -> Self {
         Self {
             bitmap: RoaringTreemap::new(),
-            score_getter: Box::new(|_| 0.0),
+            score_getter: Arc::new(|_| 0.0),
         }
     }
 }
@@ -202,12 +200,7 @@ impl ScoredGlobalIndexResult for SimpleScoredGlobalIndexResult {
     }
 
     fn clone_score_getter(&self) -> ScoreGetter {
-        let bitmap = self.bitmap.clone();
-        // We cannot clone the boxed fn, so we return a wrapper that returns 0 for unknown IDs.
-        // In practice, the score_getter is typically a HashMap lookup.
-        // For proper clone, DictBasedScoredIndexResult should be used.
-        let _ = bitmap;
-        Box::new(|_| 0.0)
+        self.score_getter.clone()
     }
 }
 
@@ -225,7 +218,7 @@ impl DictBasedScoredIndexResult {
         }
         let map = id_to_scores.clone();
         let score_getter_fn: ScoreGetter =
-            Box::new(move |row_id| map.get(&row_id).copied().unwrap_or(0.0));
+            Arc::new(move |row_id| map.get(&row_id).copied().unwrap_or(0.0));
         Self {
             id_to_scores,
             bitmap,
@@ -247,7 +240,7 @@ impl ScoredGlobalIndexResult for DictBasedScoredIndexResult {
 
     fn clone_score_getter(&self) -> ScoreGetter {
         let map = self.id_to_scores.clone();
-        Box::new(move |row_id| map.get(&row_id).copied().unwrap_or(0.0))
+        Arc::new(move |row_id| map.get(&row_id).copied().unwrap_or(0.0))
     }
 }
 
@@ -294,9 +287,7 @@ impl VectorSearch {
     pub fn offset_range(&self, from: u64, to: u64) -> Self {
         if let Some(ref include_row_ids) = self.include_row_ids {
             let mut range_bitmap = RoaringTreemap::new();
-            for i in from..to {
-                range_bitmap.insert(i);
-            }
+            range_bitmap.insert_range(from..to);
             let and_result = include_row_ids & &range_bitmap;
             let mut offset_bitmap = RoaringTreemap::new();
             for row_id in and_result.iter() {
@@ -342,5 +333,73 @@ impl GlobalIndexIOMeta {
             file_size,
             metadata,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Aligned with Java VectorSearchTest.testVectorSearchOffset
+    #[test]
+    fn test_vector_search_offset_range() {
+        let mut bitmap = RoaringTreemap::new();
+        bitmap.insert_range(100..200);
+        let vs = VectorSearch::new(vec![1.0, 2.0], 10, "vec".to_string())
+            .unwrap()
+            .with_include_row_ids(bitmap);
+
+        let result = vs.offset_range(60, 150);
+        let ids = result.include_row_ids.unwrap();
+        // [100,200) & [60,150) = [100,150), offset by -60 => [40,90)
+        assert_eq!(ids.len(), 50);
+        assert!(ids.contains(40));
+        assert!(ids.contains(89));
+        assert!(!ids.contains(39));
+        assert!(!ids.contains(90));
+    }
+
+    // Aligned with Java LuminaVectorGlobalIndexTest.testInvalidTopK
+    #[test]
+    fn test_invalid_top_k() {
+        assert!(VectorSearch::new(vec![1.0], 0, "f".to_string()).is_err());
+    }
+
+    #[test]
+    fn test_offset_range_no_filter() {
+        let vs = VectorSearch::new(vec![1.0], 5, "f".to_string()).unwrap();
+        let result = vs.offset_range(100, 200);
+        assert!(result.include_row_ids.is_none());
+    }
+
+    // Scored results: top_k, scored_offset, scored_or — exercised indirectly in Java integration tests
+    fn make_dict(entries: Vec<(u64, f32)>) -> DictBasedScoredIndexResult {
+        DictBasedScoredIndexResult::new(entries.into_iter().collect())
+    }
+
+    #[test]
+    fn test_top_k_selects_highest() {
+        let r = make_dict(vec![(1, 0.1), (2, 0.9), (3, 0.5), (4, 0.8), (5, 0.3)]);
+        let top = r.top_k(2);
+        assert_eq!(top.results().len(), 2);
+        assert!(top.results().contains(2));
+        assert!(top.results().contains(4));
+    }
+
+    #[test]
+    fn test_scored_offset_preserves_scores() {
+        let r = make_dict(vec![(1, 0.5), (2, 0.6)]);
+        let o = r.scored_offset(100);
+        assert!(o.results().contains(101));
+        assert_eq!(o.score_getter()(101), 0.5);
+        assert_eq!(o.score_getter()(102), 0.6);
+    }
+
+    #[test]
+    fn test_clone_score_getter() {
+        let r = make_dict(vec![(10, 1.5), (20, 2.5)]);
+        let cloned = r.clone_score_getter();
+        assert_eq!(cloned(10), 1.5);
+        assert_eq!(cloned(20), 2.5);
     }
 }
