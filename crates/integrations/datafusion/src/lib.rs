@@ -37,6 +37,7 @@
 //! translatable partition-only conjuncts from DataFusion filters.
 
 mod catalog;
+mod ddl;
 mod error;
 mod filter_pushdown;
 #[cfg(feature = "fulltext")]
@@ -47,6 +48,7 @@ pub mod runtime;
 mod table;
 
 pub use catalog::{PaimonCatalogProvider, PaimonSchemaProvider};
+pub use ddl::PaimonDdlHandler;
 pub use error::to_datafusion_error;
 #[cfg(feature = "fulltext")]
 pub use full_text_search::{register_full_text_search, FullTextSearchFunction};
