@@ -53,16 +53,14 @@ pub trait GlobalIndexResult: Send + Sync {
             ));
         }
 
-        Box::new(LazyGlobalIndexResult::new_ready(offset_bitmap))
+        Box::new(SimpleGlobalIndexResult::new_ready(offset_bitmap))
     }
 
     fn and(&self, other: &dyn GlobalIndexResult) -> Box<dyn GlobalIndexResult> {
-        assert!(
-            self.as_scored().is_none() && other.as_scored().is_none(),
-            "Scored global index intersection is unsupported"
-        );
+        // Scored intersection has ambiguous score semantics, so we drop scores
+        // and return an unscored result.
         let result = self.results() & other.results();
-        Box::new(LazyGlobalIndexResult::new_ready(result))
+        Box::new(SimpleGlobalIndexResult::new_ready(result))
     }
 
     fn or(&self, other: &dyn GlobalIndexResult) -> Box<dyn GlobalIndexResult> {
@@ -76,10 +74,12 @@ pub trait GlobalIndexResult: Send + Sync {
                 return Box::new(SimpleScoredGlobalIndexResult::new(
                     result_or,
                     Arc::new(move |row_id| {
-                        if this_row_ids.contains(row_id) {
-                            this_sg(row_id)
-                        } else {
-                            other_sg(row_id)
+                        let in_this = this_row_ids.contains(row_id);
+                        let in_other = other_row_ids.contains(row_id);
+                        match (in_this, in_other) {
+                            (true, true) => this_sg(row_id).max(other_sg(row_id)),
+                            (true, false) => this_sg(row_id),
+                            _ => other_sg(row_id),
                         }
                     }),
                 ));
@@ -89,7 +89,7 @@ pub trait GlobalIndexResult: Send + Sync {
         }
 
         let result = self.results() | other.results();
-        Box::new(LazyGlobalIndexResult::new_ready(result))
+        Box::new(SimpleGlobalIndexResult::new_ready(result))
     }
 
     fn is_empty(&self) -> bool {
@@ -97,11 +97,11 @@ pub trait GlobalIndexResult: Send + Sync {
     }
 }
 
-pub struct LazyGlobalIndexResult {
+pub struct SimpleGlobalIndexResult {
     bitmap: RoaringTreemap,
 }
 
-impl LazyGlobalIndexResult {
+impl SimpleGlobalIndexResult {
     pub fn new_ready(bitmap: RoaringTreemap) -> Self {
         Self { bitmap }
     }
@@ -111,7 +111,7 @@ impl LazyGlobalIndexResult {
     }
 }
 
-impl GlobalIndexResult for LazyGlobalIndexResult {
+impl GlobalIndexResult for SimpleGlobalIndexResult {
     fn results(&self) -> &RoaringTreemap {
         &self.bitmap
     }
@@ -145,13 +145,16 @@ pub trait ScoredGlobalIndexResult: GlobalIndexResult {
         let this_sg = self.clone_score_getter();
         let other_sg = other.clone_score_getter();
         let this_ids = this_row_ids;
+        let other_ids = other_row_ids;
         Box::new(SimpleScoredGlobalIndexResult::new(
             result_or,
             Arc::new(move |row_id| {
-                if this_ids.contains(row_id) {
-                    this_sg(row_id)
-                } else {
-                    other_sg(row_id)
+                let in_this = this_ids.contains(row_id);
+                let in_other = other_ids.contains(row_id);
+                match (in_this, in_other) {
+                    (true, true) => this_sg(row_id).max(other_sg(row_id)),
+                    (true, false) => this_sg(row_id),
+                    _ => other_sg(row_id),
                 }
             }),
         ))
@@ -254,7 +257,7 @@ impl ScoredGlobalIndexResult for SimpleScoredGlobalIndexResult {
 }
 
 pub struct DictBasedScoredIndexResult {
-    id_to_scores: std::collections::HashMap<u64, f32>,
+    id_to_scores: Arc<std::collections::HashMap<u64, f32>>,
     bitmap: RoaringTreemap,
     score_getter_fn: ScoreGetter,
 }
@@ -265,11 +268,12 @@ impl DictBasedScoredIndexResult {
         for &row_id in id_to_scores.keys() {
             bitmap.insert(row_id);
         }
-        let map = id_to_scores.clone();
+        let map = Arc::new(id_to_scores);
+        let map_ref = map.clone();
         let score_getter_fn: ScoreGetter =
-            Arc::new(move |row_id| map.get(&row_id).copied().unwrap_or(0.0));
+            Arc::new(move |row_id| map_ref.get(&row_id).copied().unwrap_or(0.0));
         Self {
-            id_to_scores,
+            id_to_scores: map,
             bitmap,
             score_getter_fn,
         }
@@ -474,11 +478,29 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Scored global index intersection is unsupported")]
-    fn test_scored_and_panics() {
-        let left = make_dict(vec![(1, 0.5)]);
-        let right = make_dict(vec![(1, 0.7)]);
-        let _ = left.and(&right);
+    fn test_or_overlapping_takes_max_score() {
+        let left = make_dict(vec![(1, 0.3), (2, 0.9)]);
+        let right = make_dict(vec![(1, 0.7), (2, 0.4)]);
+        let merged = left.or(&right);
+        let scored = merged
+            .as_scored()
+            .expect("or should preserve scored results");
+        assert_eq!(merged.results().len(), 2);
+        // row 1: max(0.3, 0.7) = 0.7
+        assert_eq!(scored.score_getter()(1), 0.7);
+        // row 2: max(0.9, 0.4) = 0.9
+        assert_eq!(scored.score_getter()(2), 0.9);
+    }
+
+    #[test]
+    fn test_scored_and_drops_scores() {
+        let left = make_dict(vec![(1, 0.5), (2, 0.6)]);
+        let right = make_dict(vec![(1, 0.7), (3, 0.8)]);
+        let result = left.and(&right);
+        assert_eq!(result.results().len(), 1);
+        assert!(result.results().contains(1));
+        // Scores are dropped for intersection
+        assert!(result.as_scored().is_none());
     }
 
     #[test]

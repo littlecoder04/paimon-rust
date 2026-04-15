@@ -95,9 +95,18 @@ impl LuminaVectorGlobalIndexReader {
         &self,
         vector_search: &VectorSearch,
     ) -> crate::Result<Option<Box<dyn ScoredGlobalIndexResult>>> {
-        let index_meta = self.index_meta.as_ref().unwrap();
-        let searcher = self.searcher.as_ref().unwrap();
-        let search_options_base = self.search_options.as_ref().unwrap();
+        let index_meta = self
+            .index_meta
+            .as_ref()
+            .expect("index_meta must be initialized via ensure_loaded()");
+        let searcher = self
+            .searcher
+            .as_ref()
+            .expect("searcher must be initialized via ensure_loaded()");
+        let search_options_base = self
+            .search_options
+            .as_ref()
+            .expect("search_options must be initialized via ensure_loaded()");
 
         let expected_dim = index_meta.dim()? as usize;
         if vector_search.vector.len() != expected_dim {
@@ -194,7 +203,7 @@ impl LuminaVectorGlobalIndexReader {
         let mut searcher = LuminaSearcher::create(&searcher_opts_map)?;
 
         let stream = stream_fn(&self.io_meta.file_path)?;
-        searcher.open_stream(stream, self.io_meta.file_size)?;
+        searcher.open_stream(stream)?;
 
         self.search_options = Some(searcher_opts_map);
         self.index_meta = Some(index_meta);

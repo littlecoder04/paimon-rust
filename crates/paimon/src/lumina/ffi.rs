@@ -55,17 +55,24 @@ mod tests {
 
     #[test]
     fn test_load_library_failure_does_not_cache() {
-        std::env::set_var(
-            "LUMINA_LIB_PATH",
-            "/path/that/does/not/exist/liblumina_missing.dylib",
-        );
+        // SAFETY: This test runs in isolation; env var mutation is acceptable here.
+        unsafe {
+            std::env::set_var(
+                "LUMINA_LIB_PATH",
+                "/path/that/does/not/exist/liblumina_missing.dylib",
+            );
+        }
         assert!(load_library().is_err());
-        std::env::set_var(
-            "LUMINA_LIB_PATH",
-            "/another/missing/liblumina_missing.dylib",
-        );
+        unsafe {
+            std::env::set_var(
+                "LUMINA_LIB_PATH",
+                "/another/missing/liblumina_missing.dylib",
+            );
+        }
         assert!(load_library().is_err());
-        std::env::remove_var("LUMINA_LIB_PATH");
+        unsafe {
+            std::env::remove_var("LUMINA_LIB_PATH");
+        }
     }
 }
 
@@ -97,6 +104,10 @@ pub struct LuminaSearcher {
     _stream_ctx: Option<Box<StreamContext>>,
 }
 
+// SAFETY: The liblumina C API handles are not tied to a specific thread.
+// Each LuminaSearcher owns its handle exclusively and the C library
+// uses internal locking for thread safety. The handle is only accessed
+// through &self or &mut self, so no data races can occur.
 unsafe impl Send for LuminaSearcher {}
 
 impl LuminaSearcher {
@@ -140,7 +151,6 @@ impl LuminaSearcher {
     pub fn open_stream<S: Read + Seek + Send + 'static>(
         &mut self,
         stream: S,
-        _file_size: u64,
     ) -> crate::Result<()> {
         let lib = load_library()?;
         let mut err_buf = [0u8; ERR_BUF_SIZE];
@@ -333,6 +343,8 @@ pub struct LuminaBuilder {
     handle: *mut c_void,
 }
 
+// SAFETY: Same as LuminaSearcher — the builder handle is exclusively owned
+// and the C library is thread-safe for independent handles.
 unsafe impl Send for LuminaBuilder {}
 
 impl LuminaBuilder {
@@ -545,7 +557,7 @@ unsafe extern "C" fn stream_read_cb(ctx: *mut c_void, buf: *mut c_char, size: u6
             Err(_) => return -1,
         }
     }
-    total_read as c_int
+    std::cmp::min(total_read, c_int::MAX as usize) as c_int
 }
 
 unsafe extern "C" fn stream_seek_cb(ctx: *mut c_void, position: u64) -> c_int {
