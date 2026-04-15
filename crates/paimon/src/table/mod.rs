@@ -35,7 +35,12 @@ pub(crate) mod table_commit;
 mod table_scan;
 pub(crate) mod table_write;
 mod tag_manager;
+<<<<<<< HEAD
 mod write_builder;
+=======
+#[cfg(feature = "lumina")]
+pub mod vector_search_builder;
+>>>>>>> 4aa19c2 (feat: support Lumina vector index read path)
 
 use crate::Result;
 use arrow_array::RecordBatch;
