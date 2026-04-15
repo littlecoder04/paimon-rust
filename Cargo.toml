@@ -20,7 +20,7 @@ resolver = "2"
 members = ["crates/paimon", "crates/integration_tests", "bindings/c", "bindings/python", "crates/integrations/datafusion"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 homepage = "https://paimon.apache.org/docs/rust/"
 repository = "https://github.com/apache/paimon-rust"
