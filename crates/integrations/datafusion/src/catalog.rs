@@ -30,6 +30,7 @@ use paimon::catalog::{Catalog, Identifier};
 
 use crate::error::to_datafusion_error;
 use crate::runtime::{await_with_runtime, block_on_with_runtime};
+use crate::system_tables;
 use crate::table::PaimonTableProvider;
 
 /// Provides an interface to manage and access multiple schemas (databases)
@@ -175,8 +176,19 @@ impl SchemaProvider for PaimonSchemaProvider {
     }
 
     async fn table(&self, name: &str) -> DFResult<Option<Arc<dyn TableProvider>>> {
+        let (base, system_name) = system_tables::split_object_name(name);
+        if let Some(system_name) = system_name {
+            return await_with_runtime(system_tables::load(
+                Arc::clone(&self.catalog),
+                self.database.clone(),
+                base.to_string(),
+                system_name.to_string(),
+            ))
+            .await;
+        }
+
         let catalog = Arc::clone(&self.catalog);
-        let identifier = Identifier::new(self.database.clone(), name);
+        let identifier = Identifier::new(self.database.clone(), base);
         await_with_runtime(async move {
             match catalog.get_table(&identifier).await {
                 Ok(table) => {
@@ -191,8 +203,15 @@ impl SchemaProvider for PaimonSchemaProvider {
     }
 
     fn table_exist(&self, name: &str) -> bool {
+        let (base, system_name) = system_tables::split_object_name(name);
+        if let Some(system_name) = system_name {
+            if !system_tables::is_registered(system_name) {
+                return false;
+            }
+        }
+
         let catalog = Arc::clone(&self.catalog);
-        let identifier = Identifier::new(self.database.clone(), name);
+        let identifier = Identifier::new(self.database.clone(), base.to_string());
         block_on_with_runtime(
             async move {
                 match catalog.get_table(&identifier).await {
