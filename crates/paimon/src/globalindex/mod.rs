@@ -24,25 +24,70 @@ pub type ScoreGetter = Arc<dyn Fn(u64) -> f32 + Send + Sync>;
 pub trait GlobalIndexResult: Send + Sync {
     fn results(&self) -> &RoaringTreemap;
 
+    fn as_scored(&self) -> Option<&dyn ScoredGlobalIndexResult> {
+        None
+    }
+
     fn offset(&self, start_offset: u64) -> Box<dyn GlobalIndexResult> {
-        if start_offset == 0 {
-            let bitmap = self.results().clone();
-            return Box::new(LazyGlobalIndexResult::new_ready(bitmap));
-        }
         let bitmap = self.results();
-        let mut offset_bitmap = RoaringTreemap::new();
-        for row_id in bitmap.iter() {
-            offset_bitmap.insert(row_id + start_offset);
+        let offset_bitmap = if start_offset == 0 {
+            bitmap.clone()
+        } else {
+            let mut offset_bitmap = RoaringTreemap::new();
+            for row_id in bitmap.iter() {
+                offset_bitmap.insert(row_id + start_offset);
+            }
+            offset_bitmap
+        };
+
+        if let Some(scored) = self.as_scored() {
+            let sg = scored.clone_score_getter();
+            let score_getter = if start_offset == 0 {
+                sg
+            } else {
+                Arc::new(move |row_id| sg(row_id - start_offset))
+            };
+            return Box::new(SimpleScoredGlobalIndexResult::new(
+                offset_bitmap,
+                score_getter,
+            ));
         }
+
         Box::new(LazyGlobalIndexResult::new_ready(offset_bitmap))
     }
 
     fn and(&self, other: &dyn GlobalIndexResult) -> Box<dyn GlobalIndexResult> {
+        assert!(
+            self.as_scored().is_none() && other.as_scored().is_none(),
+            "Scored global index intersection is unsupported"
+        );
         let result = self.results() & other.results();
         Box::new(LazyGlobalIndexResult::new_ready(result))
     }
 
     fn or(&self, other: &dyn GlobalIndexResult) -> Box<dyn GlobalIndexResult> {
+        match (self.as_scored(), other.as_scored()) {
+            (Some(this), Some(other)) => {
+                let this_row_ids = self.results().clone();
+                let other_row_ids = other.results().clone();
+                let result_or = &this_row_ids | &other_row_ids;
+                let this_sg = this.clone_score_getter();
+                let other_sg = other.clone_score_getter();
+                return Box::new(SimpleScoredGlobalIndexResult::new(
+                    result_or,
+                    Arc::new(move |row_id| {
+                        if this_row_ids.contains(row_id) {
+                            this_sg(row_id)
+                        } else {
+                            other_sg(row_id)
+                        }
+                    }),
+                ));
+            }
+            (None, None) => {}
+            _ => panic!("Cannot union scored and unscored global index results"),
+        }
+
         let result = self.results() | other.results();
         Box::new(LazyGlobalIndexResult::new_ready(result))
     }
@@ -192,6 +237,10 @@ impl GlobalIndexResult for SimpleScoredGlobalIndexResult {
     fn results(&self) -> &RoaringTreemap {
         &self.bitmap
     }
+
+    fn as_scored(&self) -> Option<&dyn ScoredGlobalIndexResult> {
+        Some(self)
+    }
 }
 
 impl ScoredGlobalIndexResult for SimpleScoredGlobalIndexResult {
@@ -230,6 +279,10 @@ impl DictBasedScoredIndexResult {
 impl GlobalIndexResult for DictBasedScoredIndexResult {
     fn results(&self) -> &RoaringTreemap {
         &self.bitmap
+    }
+
+    fn as_scored(&self) -> Option<&dyn ScoredGlobalIndexResult> {
+        Some(self)
     }
 }
 
@@ -393,6 +446,39 @@ mod tests {
         assert!(o.results().contains(101));
         assert_eq!(o.score_getter()(101), 0.5);
         assert_eq!(o.score_getter()(102), 0.6);
+    }
+
+    #[test]
+    fn test_base_offset_preserves_scores() {
+        let r = make_dict(vec![(1, 0.5), (2, 0.6)]);
+        let o = r.offset(100);
+        let scored = o
+            .as_scored()
+            .expect("offset should preserve scored results");
+        assert!(o.results().contains(101));
+        assert_eq!(scored.score_getter()(101), 0.5);
+        assert_eq!(scored.score_getter()(102), 0.6);
+    }
+
+    #[test]
+    fn test_base_or_preserves_scores() {
+        let left = make_dict(vec![(1, 0.5), (2, 0.6)]);
+        let right = make_dict(vec![(3, 0.7), (4, 0.8)]);
+        let merged = left.or(&right);
+        let scored = merged
+            .as_scored()
+            .expect("or should preserve scored results");
+        assert_eq!(merged.results().len(), 4);
+        assert_eq!(scored.score_getter()(1), 0.5);
+        assert_eq!(scored.score_getter()(4), 0.8);
+    }
+
+    #[test]
+    #[should_panic(expected = "Scored global index intersection is unsupported")]
+    fn test_scored_and_panics() {
+        let left = make_dict(vec![(1, 0.5)]);
+        let right = make_dict(vec![(1, 0.7)]);
+        let _ = left.and(&right);
     }
 
     #[test]

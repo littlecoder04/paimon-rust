@@ -23,26 +23,50 @@ use std::sync::OnceLock;
 
 const ERR_BUF_SIZE: usize = 4096;
 
-static LIBRARY: OnceLock<Result<Library, String>> = OnceLock::new();
+static LIBRARY: OnceLock<Library> = OnceLock::new();
 
 fn load_library() -> crate::Result<&'static Library> {
-    let result = LIBRARY.get_or_init(|| {
-        let lib_path = std::env::var("LUMINA_LIB_PATH").unwrap_or_else(|_| {
-            if cfg!(target_os = "macos") {
-                "liblumina_py.dylib".to_string()
-            } else {
-                "liblumina_py.so".to_string()
-            }
-        });
-        unsafe {
-            Library::new(&lib_path)
-                .map_err(|e| format!("Failed to load lumina library from '{}': {}", lib_path, e))
+    if let Some(library) = LIBRARY.get() {
+        return Ok(library);
+    }
+
+    let lib_path = std::env::var("LUMINA_LIB_PATH").unwrap_or_else(|_| {
+        if cfg!(target_os = "macos") {
+            "liblumina_py.dylib".to_string()
+        } else {
+            "liblumina_py.so".to_string()
         }
     });
-    result.as_ref().map_err(|e| crate::Error::DataInvalid {
-        message: e.clone(),
-        source: None,
-    })
+
+    let library = unsafe {
+        Library::new(&lib_path).map_err(|e| crate::Error::DataInvalid {
+            message: format!("Failed to load lumina library from '{}': {}", lib_path, e),
+            source: None,
+        })?
+    };
+
+    let _ = LIBRARY.set(library);
+    Ok(LIBRARY.get().expect("lumina library should be initialized"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::load_library;
+
+    #[test]
+    fn test_load_library_failure_does_not_cache() {
+        std::env::set_var(
+            "LUMINA_LIB_PATH",
+            "/path/that/does/not/exist/liblumina_missing.dylib",
+        );
+        assert!(load_library().is_err());
+        std::env::set_var(
+            "LUMINA_LIB_PATH",
+            "/another/missing/liblumina_missing.dylib",
+        );
+        assert!(load_library().is_err());
+        std::env::remove_var("LUMINA_LIB_PATH");
+    }
 }
 
 fn check_error(ret: c_int, err_buf: &[u8; ERR_BUF_SIZE]) -> crate::Result<()> {
@@ -415,11 +439,10 @@ impl LuminaBuilder {
 
     pub fn dump(&self, path: &str) -> crate::Result<()> {
         let lib = load_library()?;
-        let c_path =
-            CString::new(path).map_err(|e| crate::Error::DataInvalid {
-                message: format!("Invalid path: {}", e),
-                source: None,
-            })?;
+        let c_path = CString::new(path).map_err(|e| crate::Error::DataInvalid {
+            message: format!("Invalid path: {}", e),
+            source: None,
+        })?;
         let mut err_buf = [0u8; ERR_BUF_SIZE];
 
         let ret: c_int = unsafe {
