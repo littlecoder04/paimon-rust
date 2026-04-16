@@ -21,6 +21,8 @@
 
 use crate::io::FileIO;
 use crate::spec::TableSchema;
+use futures::future::try_join_all;
+use opendal::raw::get_basename;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -65,6 +67,48 @@ impl SchemaManager {
         format!("{}/{}{}", self.schema_directory(), SCHEMA_PREFIX, schema_id)
     }
 
+    /// List all schema ids sorted ascending. Returns an empty vector if the
+    /// schema directory is missing or empty.
+    ///
+    /// Mirrors Java [SchemaManager.listAllIds()](https://github.com/apache/paimon/blob/release-1.3/paimon-core/src/main/java/org/apache/paimon/schema/SchemaManager.java).
+    pub async fn list_all_ids(&self) -> crate::Result<Vec<i64>> {
+        let mut ids: Vec<i64> = self
+            .file_io
+            .list_status(&self.schema_directory())
+            .await?
+            .into_iter()
+            .filter(|s| !s.is_dir)
+            .filter_map(|s| {
+                get_basename(s.path.as_str())
+                    .strip_prefix(SCHEMA_PREFIX)?
+                    .parse::<i64>()
+                    .ok()
+            })
+            .collect();
+        ids.sort_unstable();
+        Ok(ids)
+    }
+
+    /// List all schemas sorted by id ascending.
+    ///
+    /// Mirrors Java [SchemaManager.listAll()](https://github.com/apache/paimon/blob/release-1.3/paimon-core/src/main/java/org/apache/paimon/schema/SchemaManager.java).
+    pub async fn list_all(&self) -> crate::Result<Vec<Arc<TableSchema>>> {
+        let ids = self.list_all_ids().await?;
+        try_join_all(ids.into_iter().map(|id| self.schema(id))).await
+    }
+
+    /// Return the schema with the highest id, or `None` when no schema files
+    /// exist under the schema directory.
+    ///
+    /// Mirrors Java [SchemaManager.latest()](https://github.com/apache/paimon/blob/release-1.3/paimon-core/src/main/java/org/apache/paimon/schema/SchemaManager.java).
+    pub async fn latest(&self) -> crate::Result<Option<Arc<TableSchema>>> {
+        let ids = self.list_all_ids().await?;
+        match ids.last() {
+            Some(&max_id) => Ok(Some(self.schema(max_id).await?)),
+            None => Ok(None),
+        }
+    }
+
     /// Load a schema by ID. Returns cached version if available.
     ///
     /// The cache is shared across all clones of this `SchemaManager`, so loading
@@ -99,5 +143,116 @@ impl SchemaManager {
         }
 
         Ok(schema)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::FileIOBuilder;
+    use crate::spec::Schema;
+    use bytes::Bytes;
+
+    fn memory_file_io() -> FileIO {
+        FileIOBuilder::new("memory").build().unwrap()
+    }
+
+    async fn write_schema_file(file_io: &FileIO, dir: &str, id: i64) {
+        let schema = Schema::builder().build().unwrap();
+        let table_schema = TableSchema::new(id, &schema);
+        let json = serde_json::to_vec(&table_schema).unwrap();
+        let path = format!("{dir}/{SCHEMA_PREFIX}{id}");
+        let out = file_io.new_output(&path).unwrap();
+        out.write(Bytes::from(json)).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_all_ids_returns_empty_for_missing_directory() {
+        let file_io = memory_file_io();
+        let sm = SchemaManager::new(file_io, "memory:/list_missing".to_string());
+        assert!(sm.list_all_ids().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_all_ids_returns_empty_for_empty_directory() {
+        let file_io = memory_file_io();
+        let table_path = "memory:/list_empty";
+        let dir = format!("{table_path}/{SCHEMA_DIR}");
+        file_io.mkdirs(&dir).await.unwrap();
+
+        let sm = SchemaManager::new(file_io, table_path.to_string());
+        assert!(sm.list_all_ids().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_all_ids_sorts_ascending() {
+        let file_io = memory_file_io();
+        let table_path = "memory:/list_sorted";
+        let dir = format!("{table_path}/{SCHEMA_DIR}");
+        file_io.mkdirs(&dir).await.unwrap();
+        for id in [3, 0, 2, 1] {
+            write_schema_file(&file_io, &dir, id).await;
+        }
+
+        let sm = SchemaManager::new(file_io, table_path.to_string());
+        assert_eq!(sm.list_all_ids().await.unwrap(), vec![0, 1, 2, 3]);
+    }
+
+    #[tokio::test]
+    async fn list_all_ids_ignores_unrelated_files() {
+        let file_io = memory_file_io();
+        let table_path = "memory:/list_filter";
+        let dir = format!("{table_path}/{SCHEMA_DIR}");
+        file_io.mkdirs(&dir).await.unwrap();
+        write_schema_file(&file_io, &dir, 0).await;
+        // `schema-foo` starts with the prefix but is not an i64.
+        let junk = file_io
+            .new_output(&format!("{dir}/{SCHEMA_PREFIX}foo"))
+            .unwrap();
+        junk.write(Bytes::from("{}")).await.unwrap();
+        // A completely unrelated file.
+        let other = file_io.new_output(&format!("{dir}/README")).unwrap();
+        other.write(Bytes::from("hi")).await.unwrap();
+
+        let sm = SchemaManager::new(file_io, table_path.to_string());
+        assert_eq!(sm.list_all_ids().await.unwrap(), vec![0]);
+    }
+
+    #[tokio::test]
+    async fn list_all_loads_schemas_in_order() {
+        let file_io = memory_file_io();
+        let table_path = "memory:/list_all_load";
+        let dir = format!("{table_path}/{SCHEMA_DIR}");
+        file_io.mkdirs(&dir).await.unwrap();
+        for id in [0, 2, 1] {
+            write_schema_file(&file_io, &dir, id).await;
+        }
+
+        let sm = SchemaManager::new(file_io, table_path.to_string());
+        let schemas = sm.list_all().await.unwrap();
+        let ids: Vec<i64> = schemas.iter().map(|s| s.id()).collect();
+        assert_eq!(ids, vec![0, 1, 2]);
+    }
+
+    #[tokio::test]
+    async fn latest_returns_none_when_no_schemas() {
+        let file_io = memory_file_io();
+        let sm = SchemaManager::new(file_io, "memory:/latest_none".to_string());
+        assert!(sm.latest().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn latest_returns_max_id_schema() {
+        let file_io = memory_file_io();
+        let table_path = "memory:/latest_max";
+        let dir = format!("{table_path}/{SCHEMA_DIR}");
+        file_io.mkdirs(&dir).await.unwrap();
+        for id in [0, 5, 2] {
+            write_schema_file(&file_io, &dir, id).await;
+        }
+
+        let sm = SchemaManager::new(file_io, table_path.to_string());
+        let latest = sm.latest().await.unwrap().expect("latest");
+        assert_eq!(latest.id(), 5);
     }
 }
